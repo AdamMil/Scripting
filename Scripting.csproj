@@ -35,6 +35,7 @@
     <Compile Include="AST.cs" />
     <Compile Include="Attributes.cs" />
     <Compile Include="CodeGenerator.cs" />
+    <Compile Include="DotNetInterop.cs" />
     <Compile Include="Errors.cs" />
     <Compile Include="Integer.cs" />
     <Compile Include="Language.cs" />
@@ -42,6 +43,7 @@
     <Compile Include="Ops.cs" />
     <Compile Include="Options.cs" />
     <Compile Include="Parser.cs" />
+    <Compile Include="ReflectionWrappers.cs" />
     <Compile Include="Runtime.cs" />
     <Compile Include="Scanner.cs" />
     <Compile Include="Slots.cs" />

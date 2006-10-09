@@ -36,18 +36,19 @@ public enum Stage
 {
   /// <summary>This stage operates upon a parse tree that is not yet decorated or even correct. Its responsibilities
   /// are to replace nodes with other nodes as necessary to ovecome deficiencies in the parser, and get the tree into
-  /// a form that correctly represents the program.
+  /// a form that correctly represents the source code.
   /// </summary>
   PreDecorate,
-  /// <summary>This stage operates upon a parse tree that is correct, but not decorated. Its responsibilies are to
+  /// <summary>This stage operates upon a parse tree that is true to the source code, but not decorated. Its
+  /// responsibilies are to check the semantics of the tree to ensure that the user's source code is valid, and to
   /// decorate the tree (ensure that every <see cref="VariableNode"/> has the correct slot, ensure that
   /// <see cref="ASTNode.MarkTail">tails are marked</see>, etc).
   /// </summary>
   Decorate,
-  /// <summary>This stage operates upon a parse tree that is fully decorated, but not yet optimized. Its
-  /// responsibilities are to optimize the tree while maintaining correctness and proper decoration.
+  /// <summary>This stage operates upon a parse tree that is fully decorated and semantically valid, but not yet
+  /// optimized. Its responsibilities are to optimize the tree while maintaining correctness and proper decoration.
   /// </summary>
-  Decorated,
+  Optimize,
   /// <summary>This stage operates upon a parse tree that is fully decorated and optimized.</summary>
   Optimized
 }
@@ -83,17 +84,17 @@ public class TailMarkerStage : IASTProcessor
 #region ASTDecorator
 public sealed class ASTDecorator
 {
-  public void AddStageToBeginning(IASTProcessor stage)
+  public void AddToBeginningOfStage(IASTProcessor processor)
   {
-    GetStageList(stage.Stage).Insert(0, stage);
+    GetProcessors(processor.Stage).Insert(0, processor);
   }
 
-  public void AddStageToEnd(IASTProcessor stage)
+  public void AddToEndOfStage(IASTProcessor processor)
   {
-    GetStageList(stage.Stage).Add(stage);
+    GetProcessors(processor.Stage).Add(processor);
   }
 
-  public ASTProcessorCollection GetStageList(Stage stage)
+  public ASTProcessorCollection GetProcessors(Stage stage)
   {
     ASTProcessorCollection stageCollection = stages[(int)stage];
     if(stageCollection == null)
