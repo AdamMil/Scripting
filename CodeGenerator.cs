@@ -314,9 +314,9 @@ public static class CG
 #region CodeGenerator
 public class CodeGenerator
 {
-  public CodeGenerator(TypeGenerator tg, ConstructorBuilder cb) : this(tg, cb, cb.GetILGenerator()) { }
-  public CodeGenerator(TypeGenerator tg, MethodBuilder mb) : this(tg, mb, mb.GetILGenerator()) { }
-  public CodeGenerator(TypeGenerator tg, MethodBase mb, ILGenerator ilg)
+  public CodeGenerator(TypeGenerator tg, ConstructorBuilderWrapper cb) : this(tg, cb, cb.Builder.GetILGenerator()) { }
+  public CodeGenerator(TypeGenerator tg, MethodBuilderWrapper mb) : this(tg, mb, mb.Builder.GetILGenerator()) { }
+  public CodeGenerator(TypeGenerator tg, IMethodBase mb, ILGenerator ilg)
   {
     Assembly  = tg.Assembly;
     TypeGen   = tg;
@@ -325,7 +325,7 @@ public class CodeGenerator
     IsStatic  = mb.IsStatic;
   }
 
-  public CodeGenerator(AssemblyGenerator ag, DynamicMethod dm) : this(ag, dm, null) { }
+  /*public CodeGenerator(AssemblyGenerator ag, DynamicMethod dm) : this(ag, dm, null) { }
   public CodeGenerator(AssemblyGenerator ag, DynamicMethod dm, Type associatedType)
   {
     Assembly = ag;
@@ -335,11 +335,11 @@ public class CodeGenerator
 
     IsDynamicMethod = true;
     AssociatedType  = associatedType;
-  }
+  }*/
 
   public readonly AssemblyGenerator Assembly;
   public readonly TypeGenerator TypeGen;
-  public readonly MethodBase Method;
+  public readonly IMethodBase Method;
   public readonly ILGenerator ILG;
   /// <summary>The type associated with the current dynamic method. If not null, the method is logically associated
   /// with the given type, and an instance of the type is passed as the method's first parameter.
@@ -586,6 +586,14 @@ public class CodeGenerator
     ILG.Emit(OpCodes.Call, ci);
   }
 
+  /// <summary>Emits a call to the given constructor. This should only be used in a constructor, to call the
+  /// constructor of the base class.
+  /// </summary>
+  public void EmitCall(IConstructorInfo ci)
+  {
+    ILG.Emit(OpCodes.Call, ci.Method);
+  }
+
   /// <summary>Emits a call to the given method.</summary>
   public void EmitCall(MethodInfo mi)
   {
@@ -598,9 +606,15 @@ public class CodeGenerator
     }
     else // otherwise it's an instance method and might be overridden. even if it's non-virtual, we'll still emit a
     {    // virtual call because in that case it's defined in another assembly and might become virtual in the future.
-      if(mi.DeclaringType.IsValueType) ILG.Emit(OpCodes.Constrained); // simply calls on value types
+      if(mi.DeclaringType.IsValueType) ILG.Emit(OpCodes.Constrained, mi.DeclaringType); // simply calls on value types
       ILG.Emit(OpCodes.Callvirt, mi);
     }
+  }
+
+  /// <summary>Emits a call to the given method.</summary>
+  public void EmitCall(IMethodInfo mi)
+  {
+    EmitCall(mi.Method);
   }
 
   /// <summary>Emits a call to the given method. The method will be found by name, and work as long as the method has
@@ -615,6 +629,20 @@ public class CodeGenerator
   public void EmitCall(Type type, string method, params Type[] paramTypes)
   {
     EmitCall(type.GetMethod(method, paramTypes));
+  }
+
+  /// <summary>Emits a call to the given method. The method will be found by name, and work as long as the method has
+  /// no overrides.
+  /// </summary>
+  public void EmitCall(ITypeInfo type, string method)
+  {
+    EmitCall(type.GetMethod(method, SearchAll).Method);
+  }
+
+  /// <summary>Emits a call to the given method. The method will be found by name and parameter signature.</summary>
+  public void EmitCall(ITypeInfo type, string method, params Type[] paramTypes)
+  {
+    EmitCall(type.GetMethod(method, SearchAll, paramTypes).Method);
   }
 
   /// <summary>Emits a constant value onto the stack.</summary>
@@ -800,10 +828,22 @@ public class CodeGenerator
   }
 
   /// <summary>Emits code to retrieve the given field value.</summary>
+  public void EmitFieldGet(ITypeInfo type, string fieldName)
+  {
+    EmitFieldGet(type.GetField(fieldName));
+  }
+
+  /// <summary>Emits code to retrieve the given field value.</summary>
   public void EmitFieldGet(FieldInfo field)
   {
     if(field.IsLiteral) EmitConstant(field.GetValue(null)); // if it's a constant field, emit the value directly
     else ILG.Emit(field.IsStatic ? OpCodes.Ldsfld : OpCodes.Ldfld, field);
+  }
+
+  /// <summary>Emits code to retrieve the given field value.</summary>
+  public void EmitFieldGet(IFieldInfo field)
+  {
+    EmitFieldGet(field.Field);
   }
 
   /// <summary>Emits code to retrieve the given field address.</summary>
@@ -813,10 +853,22 @@ public class CodeGenerator
   }
 
   /// <summary>Emits code to retrieve the given field address.</summary>
+  public void EmitFieldGetAddr(ITypeInfo type, string fieldName)
+  {
+    EmitFieldGetAddr(type.GetField(fieldName));
+  }
+
+  /// <summary>Emits code to retrieve the given field address.</summary>
   public void EmitFieldGetAddr(FieldInfo field)
   {
     if(field.IsLiteral) throw new ArgumentException("Cannot get the address of a literal (constant) field");
     else ILG.Emit(field.IsStatic ? OpCodes.Ldsflda : OpCodes.Ldflda, field);
+  }
+
+  /// <summary>Emits code to retrieve the given field address.</summary>
+  public void EmitFieldGetAddr(IFieldInfo field)
+  {
+    EmitFieldGetAddr(field.Field);
   }
 
   /// <summary>Emits code to set the given field value.</summary>
@@ -826,13 +878,19 @@ public class CodeGenerator
   }
 
   /// <summary>Emits code to set the given field value.</summary>
+  public void EmitFieldSet(ITypeInfo type, string fieldName)
+  {
+    EmitFieldSet(type.GetField(fieldName));
+  }
+
+  /// <summary>Emits code to set the given field value.</summary>
   public void EmitFieldSet(FieldInfo field)
   {
     if(field.IsLiteral)
     {
       throw new ArgumentException("Cannot set a literal (constant) field");
     }
-    else if(field.IsInitOnly && !(Method is ConstructorInfo))
+    else if(field.IsInitOnly && !(Method.Method is ConstructorInfo))
     {
       throw new ArgumentException("Cannot set a read-only field outside of a constructor.");
     }
@@ -840,6 +898,12 @@ public class CodeGenerator
     {
       ILG.Emit(field.IsStatic ? OpCodes.Stsfld : OpCodes.Stfld, field);
     }
+  }
+
+  /// <summary>Emits code to set the given field value.</summary>
+  public void EmitFieldSet(IFieldInfo field)
+  {
+    EmitFieldSet(field.Field);
   }
 
   public void EmitIndirectLoad(Type type)
@@ -977,7 +1041,22 @@ public class CodeGenerator
     }
     else // otherwise it's a reference type, so emit the default constructor
     {
-      EmitNew(type.GetConstructor(Type.EmptyTypes));
+      EmitNew(type.GetConstructor(ConstructorSearch, null, Type.EmptyTypes, null));
+    }
+  }
+
+  /// <summary>Emits code to create a new instance of an object of the given type using the default constructor.
+  /// For value types, initializes the value to all zeros.
+  /// </summary>
+  public void EmitNew(ITypeInfo type)
+  {
+    if(type.DotNetType.IsValueType)
+    {
+      EmitNew(type.DotNetType);
+    }
+    else
+    {
+      EmitNew(type.GetConstructor(ConstructorSearch, Type.EmptyTypes));
     }
   }
 
@@ -992,7 +1071,22 @@ public class CodeGenerator
     }
     else
     {
-      EmitNew(type.GetConstructor(SearchAll, null, paramTypes, null));
+      EmitNew(type.GetConstructor(ConstructorSearch, null, paramTypes, null));
+    }
+  }
+
+  /// <summary>Emits code to create a new instance of an object of the given type using the constructor that takes the
+  /// given parameter types.
+  /// </summary>
+  public void EmitNew(ITypeInfo type, params Type[] paramTypes)
+  {
+    if(paramTypes.Length == 0) // if there are no parameters, use the EmitNew(Type) overload, which handles value types
+    {
+      EmitNew(type);
+    }
+    else
+    {
+      EmitNew(type.GetConstructor(ConstructorSearch, paramTypes));
     }
   }
 
@@ -1002,6 +1096,14 @@ public class CodeGenerator
   public void EmitNew(ConstructorInfo ci)
   {
     ILG.Emit(OpCodes.Newobj, ci);
+  }
+
+  /// <summary>Emits code to create a new instance of an object of the given type using the given
+  /// <see cref="IConstructorInfo"/>.
+  /// </summary>
+  public void EmitNew(IConstructorInfo ci)
+  {
+    ILG.Emit(OpCodes.Newobj, ci.Method);
   }
 
   /// <summary>Emits code to create a new zero-based, one-dimensional array of the given element type and length.</summary>
@@ -1087,6 +1189,48 @@ public class CodeGenerator
   {
     EmitTypedNode(node, ((MethodInfo)Method).ReturnType);
     ILG.Emit(OpCodes.Ret);
+  }
+
+  /// <summary>Emits code to convert a value from one type to another. If not enough information is available to
+  /// perform the conversion at compile time, code to perform a runtime conversion will be emitted.
+  /// </summary>
+  public void EmitRuntimeConversion(Type typeOnStack, Type destinationType)
+  {
+    if(!TryEmitSafeConversion(typeOnStack, destinationType, false)) // if we couldn't do a compile-time conversion...
+    {
+      // if the destination type is a pointer, get the type that it points to and convert to that. we'll get the
+      // pointer later via unboxing
+      Type rootType = destinationType;
+      if(rootType.IsPointer || rootType.IsByRef)
+      {
+        rootType = rootType.GetElementType();
+        if(!rootType.IsValueType || rootType.IsPointer || rootType.IsByRef)
+        {
+          throw new ArgumentException(typeOnStack.FullName + " could not be converted to "+destinationType.FullName);
+        }
+      }
+
+      EmitSafeConversion(typeOnStack, typeof(object));
+      EmitType(rootType);
+      EmitCall(typeof(Ops), "ConvertTo", typeof(object), typeof(Type));
+      
+      // at this point, the object on the stack is an instance of rootType (potentially boxed)
+      if(rootType.IsValueType) // if the root type is a value type, we can either return the value or a pointer to it
+      {
+        ILG.Emit(OpCodes.Unbox, rootType);
+
+        // if we want the actual value, we'll load it indirectly from the boxed value. otherwise, if we want the
+        // pointer, we'll simply leave it on the stack (as unbox pushes a pointer to the value)
+        if(!destinationType.IsPointer && !destinationType.IsByRef)
+        {
+          EmitIndirectLoad(rootType);
+        }
+      }
+      else if(destinationType != typeof(object)) // otherwise, it's a reference type. perform a downcast if necessary
+      {
+        ILG.Emit(OpCodes.Castclass, destinationType);
+      }
+    }
   }
 
   /// <summary>Emits code to convert a value from one type to another.</summary>
@@ -1256,7 +1400,7 @@ public class CodeGenerator
   /// <summary>Adds a custom attribute to the method or constructor being generated.</summary>
   public void SetCustomAttribute(CustomAttributeBuilder attributeBuilder)
   {
-    CG.SetCustomAttribute(Method, attributeBuilder);
+    CG.SetCustomAttribute(Method.Method, attributeBuilder);
   }
 
   public bool TryEmitSafeConversion(Type typeOnStack, Type destType, bool checkOverflow)
@@ -1619,6 +1763,7 @@ public class CodeGenerator
     return TypeGen.DefineField("tmp$"+localNameIndex++, type);
   }
 
+  const BindingFlags ConstructorSearch = BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance;
   const BindingFlags SearchAll = BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance|BindingFlags.Static;
   
   /// <summary>A list of cached constants, grouped by type.</summary>

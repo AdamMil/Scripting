@@ -76,25 +76,38 @@ public sealed class AssemblyGenerator
   /// <summary>Defines a new public type in the assembly.</summary>
   public TypeGenerator DefineType(string name)
   {
-    return DefineType(TypeAttributes.Public, name, null);
+    return DefineType(TypeAttributes.Public, name, (ITypeInfo)null);
   }
 
   /// <summary>Defines a new public type in the assembly.</summary>
-  public TypeGenerator DefineType(string name, Type parent)
+  public TypeGenerator DefineType(string name, Type baseType)
   {
-    return DefineType(TypeAttributes.Public, name, parent);
+    return DefineType(name, baseType == null ? null : new TypeWrapper(baseType));
+  }
+
+  /// <summary>Defines a new public type in the assembly.</summary>
+  public TypeGenerator DefineType(string name, ITypeInfo baseType)
+  {
+    return DefineType(TypeAttributes.Public, name, baseType);
   }
 
   /// <summary>Defines a new type in the assembly.</summary>
-  public TypeGenerator DefineType(TypeAttributes attrs, string name)
+  public TypeGenerator DefineType(TypeAttributes attributes, string name)
   {
-    return DefineType(attrs, name, null);
+    return DefineType(attributes, name, (ITypeInfo)null);
   }
 
   /// <summary>Defines a new type in the assembly.</summary>
-  public TypeGenerator DefineType(TypeAttributes attrs, string name, Type parent)
+  public TypeGenerator DefineType(TypeAttributes attributes, string name, Type baseType)
   {
-    TypeGenerator tg = new TypeGenerator(this, Module.DefineType(name, attrs, parent));
+    return DefineType(attributes, name, baseType == null ? null : new TypeWrapper(baseType));
+  }
+
+  /// <summary>Defines a new type in the assembly.</summary>
+  public TypeGenerator DefineType(TypeAttributes attributes, string name, ITypeInfo baseType)
+  {
+    TypeBuilder builder = Module.DefineType(name, attributes, baseType == null ? null : baseType.DotNetType);
+    TypeGenerator tg = new TypeGenerator(this, builder, baseType, null);
     types.Add(tg);
     return tg;
   }
@@ -109,6 +122,23 @@ public sealed class AssemblyGenerator
     }
 
     Module.CreateGlobalFunctions();
+  }
+
+  /// <summary>Creates an <see cref="ICallable"/> type that will invoke the given method. If the method is not static
+  /// and is not a constructor, the 'this' pointer must be passed as the first argument when calling the wrapper.
+  /// </summary>
+  public ITypeInfo GetMethodWrapper(IMethodBase method)
+  {
+    Signature signature = new Signature(method);
+    ITypeInfo wrapperType;
+
+    if(!methodWrappers.TryGetValue(signature, out wrapperType))
+    {
+      methodWrappers[signature] = wrapperType =
+        DotNetInterop.MakeMethodWrapper(GetPrivateClass(), signature, method, "mwrap$" + wrapperIndex.Next);
+    }
+    
+    return wrapperType;
   }
 
   /// <summary>Gets a <see cref="TypeGenerator"/> for private implementation details.</summary>
@@ -128,7 +158,9 @@ public sealed class AssemblyGenerator
     Assembly.Save(OutFileName);
   }
 
-  List<TypeGenerator> types = new List<TypeGenerator>();
+  readonly Dictionary<Signature,ITypeInfo> methodWrappers = new Dictionary<Signature,ITypeInfo>();
+  readonly List<TypeGenerator> types = new List<TypeGenerator>();
+  readonly Index wrapperIndex = new Index();
   TypeGenerator privateClass;
 
   static string RandomOutputFile()

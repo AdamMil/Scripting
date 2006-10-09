@@ -755,7 +755,7 @@ public class ParameterNode : NonExecutableNode
       ParameterNode param = parameters[i];
       if(names.Contains(param.Name)) // check for duplicate parameters
       {
-        throw new ArgumentException("Ruplicate parameter: "+param.Name);
+        throw new ArgumentException("Duplicate parameter: "+param.Name);
       }
       names.Add(param.Name);
       
@@ -806,53 +806,21 @@ public class ScriptFunctionNode : FunctionNode
 
   public override void Emit(CodeGenerator cg, ref Type desiredType)
   {
+    currentIndex = functionIndex.Next;
+
+    // create the method in the private class
+    TypeGenerator privateClass = cg.Assembly.GetPrivateClass();
+    IMethodInfo method = MakeDotNetMethod(privateClass);
+
     if(desiredType != typeof(void))
     {
-      if(cg.IsDynamicMethod) // if the we're emitted within a dynamic method, we'll also create a dynamic method
-      {
-        cg.EmitCachedConstant(MakeDynamicMethod(cg));
-        cg.EmitArgGet(0); // emit a reference to the local environment, which is passed in the first parameter
-        EmitDefaultParameterValues(cg);
-        cg.EmitCall(typeof(DynamicMethodClosure), "Clone");
-      }
-      else // otherwise we'll emit a real function
-      {
-        currentIndex = functionIndex.Next;
-
-        // create the method in the private class
-        TypeGenerator privateClass = cg.Assembly.GetPrivateClass();
-        MethodInfo method = MakeMethod(privateClass);
-
-        // add the function template to the private class
-        CodeGenerator privateCg = privateClass.GetInitializer();
-        privateCg.ILG.Emit(OpCodes.Ldftn, method);
-        privateCg.EmitString(Name);
-        privateCg.EmitCachedConstant(GetParameterNames());
-        privateCg.EmitCachedConstant(GetParameterTypes());
-        privateCg.EmitInt(RequiredParameterCount);
-        privateCg.EmitBool(false); // has list parameter
-        privateCg.EmitBool(false); // has dict parameter
-        privateCg.EmitBool(false); // has argument closure
-        privateCg.EmitNew(typeof(FunctionTemplate), typeof(IntPtr), typeof(string), typeof(string[]), typeof(Type[]),
-                    typeof(int), typeof(bool), typeof(bool), typeof(bool));
-        Slot template = privateClass.DefineStaticField(FieldAttributes.Public|FieldAttributes.InitOnly,
-                                                       "template$"+currentIndex+"_"+Name, typeof(FunctionTemplate));
-        template.EmitSet(privateCg);
-
-        // now create the closure that references the template in the current method
-        template.EmitGet(cg);
-        if(OptionalParameterCount != 0)
-        {
-          EmitDefaultParameterValues(cg);
-          cg.EmitNew(RG.ClosureType, typeof(FunctionTemplate), typeof(object[]));
-        }
-        else
-        {
-          cg.EmitNew(RG.ClosureType, typeof(FunctionTemplate));
-        }
-
-        cg.EmitSafeConversion(ValueType, desiredType);
-      }
+      // create the function wrapper
+      ITypeInfo wrapperType = cg.Assembly.GetMethodWrapper(method);
+      // instantiate it in the private class and store a reference to it
+      cg.ILG.Emit(OpCodes.Ldftn, method.Method);
+      cg.EmitBool(true); // isStatic
+      cg.EmitNew(wrapperType, typeof(IntPtr), typeof(bool));
+      cg.EmitSafeConversion(ValueType, desiredType);
     }
 
     TailReturn(cg);
@@ -940,21 +908,27 @@ public class ScriptFunctionNode : FunctionNode
     return allObject ? null : ParameterNode.GetTypes(GetParameterArray()); // return null if all are of type object
   }
 
-  MethodInfo MakeMethod(TypeGenerator typeGen)
+  IMethodInfo MakeDotNetMethod(TypeGenerator containingClass)
   {
     string name = "lambda$" + currentIndex + Name;
-    CodeGenerator methodCg = typeGen.DefineStaticMethod(name, ReturnType, typeof(object[]));
+    CodeGenerator methodCg = containingClass.DefineStaticMethod(name, ReturnType, GetParameterTypes());
 
-    MethodBuilder mb = (MethodBuilder)methodCg.Method; // add names for the parameters
-    mb.DefineParameter(1, ParameterAttributes.In, "ARGS");
+    // add names for the parameters
+    MethodBuilderWrapper mb = (MethodBuilderWrapper)methodCg.Method;
+    for(int i=0; i<Parameters.Count; i++)
+    {
+      mb.DefineParameter(i, ParameterAttributes.In, ((ParameterNode)Parameters[i]).Name);
+    }
+
     methodCg.EmitTypedNode(Body, ReturnType);
     methodCg.Finish();
-    return (MethodInfo)methodCg.Method;
+    return (IMethodInfo)methodCg.Method;
   }
 
   DynamicMethodClosure MakeDynamicMethod(CodeGenerator cg)
   {
-    DynamicMethod method =
+    throw new NotImplementedException();
+    /*DynamicMethod method =
       new DynamicMethod(Name == null ? "function" : Name, ReturnType, new Type[] {
                           typeof(DynamicMethodClosure), typeof(DynamicMethodEnvironment), typeof(object[]) },
                         typeof(DynamicMethodClosure));
@@ -971,7 +945,7 @@ public class ScriptFunctionNode : FunctionNode
     
     FunctionTemplate template = new FunctionTemplate(IntPtr.Zero, Name, GetParameterNames(), GetParameterTypes(),
                                                      RequiredParameterCount, false, false, false);
-    return new DynamicMethodClosure(method, template, bindings, constants);
+    return new DynamicMethodClosure(method, template, bindings, constants);*/
   }
 
   long currentIndex;
