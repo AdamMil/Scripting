@@ -70,7 +70,7 @@ public interface IScanner
 }
 #endregion
 
-#region StandardScanner
+#region ScannerBase
 /// <summary>Provides a helper class for implementing scanners.</summary>
 /// <remarks>You are not required to use this class when you implement scanners. This class exists only to provide a
 /// part of the <see cref="IScanner"/> implementation.
@@ -144,30 +144,10 @@ public abstract class ScannerBase : IScanner
     get { return currentChar; }
   }
 
-  /// <summary>Gets the pushback character. This is only valid if it has been previously set.</summary>
+  /// <summary>Gets or sets the pushback character.</summary>
   protected char PushedChar
   {
     get { return pushedChar; }
-    set
-    {
-      if(pushedChar != '\0')
-      {
-        throw new InvalidOperationException("A character has already been pushed back.");
-      }
-
-      // adjust the current position based on the value of the pushed character
-      if(value == '\n' || value == '\r')
-      {
-        column = previousLineLength;
-        line--;
-      }
-      else
-      {
-        column--;
-      }
-
-      pushedChar = value;
-    }
   }
 
   /// <summary>Gets the one-based column index within the current source line.</summary>
@@ -239,6 +219,24 @@ public abstract class ScannerBase : IScanner
     {
       throw new SyntaxErrorException(message);
     }
+  }
+  
+  /// <summary>Adds a new error message using the current source name and position.</summary>
+  protected void AddErrorMessage(string message)
+  {
+    AddErrorMessage(SourceName, Position, message);
+  }
+
+  /// <summary>Adds a new error message using the current source name and the given position.</summary>
+  protected void AddErrorMessage(FilePosition position, string message)
+  {
+    AddErrorMessage(SourceName, position, message);
+  }
+
+  /// <summary>Adds a new error message using the given source name and position.</summary>
+  protected void AddErrorMessage(string sourceName, FilePosition position, string message)
+  {
+    AddMessage(new OutputMessage(OutputMessageType.Error, message, sourceName, position));
   }
 
   /// <summary>Loads a data stream, given its source name.</summary>
@@ -334,6 +332,28 @@ public abstract class ScannerBase : IScanner
       pushedChar = '\0';
       NextChar();
       return true;
+    }
+  }
+
+  /// <summary>Pushes a character back onto the input so that it will be the next character read.</summary>
+  protected void PushBack(char c)
+  {
+    if(pushedChar != 0) throw new InvalidOperationException("A character has already been pushed back.");
+
+    if(c != 0)
+    {
+      // adjust the current position based on the value of the pushed character
+      if(c == '\n' || c == '\r')
+      {
+        column = previousLineLength;
+        line--;
+      }
+      else
+      {
+        column--;
+      }
+
+      pushedChar = c;
     }
   }
 
