@@ -801,7 +801,7 @@ public class ScriptFunctionNode : FunctionNode
 
   public override Type ValueType
   {
-    get { return typeof(Function); }
+    get { return typeof(ICallableWithKeywords); }
   }
 
   public override void Emit(CodeGenerator cg, ref Type desiredType)
@@ -809,8 +809,7 @@ public class ScriptFunctionNode : FunctionNode
     currentIndex = functionIndex.Next;
 
     // create the method in the private class
-    TypeGenerator privateClass = cg.Assembly.GetPrivateClass();
-    IMethodInfo method = MakeDotNetMethod(privateClass);
+    IMethodInfo method = GetMethod(cg.Assembly);
 
     if(desiredType != typeof(void))
     {
@@ -831,6 +830,15 @@ public class ScriptFunctionNode : FunctionNode
     return new InterpretedFunction(Name, GetParameterArray(), Body);
   }
   
+  public IMethodInfo GetMethod(AssemblyGenerator ag)
+  {
+    if(generatedMethod == null)
+    {
+      generatedMethod = MakeDotNetMethod(ag.GetPrivateClass());
+    }
+    return generatedMethod;
+  }
+
   void EmitDefaultParameterValues(CodeGenerator cg)
   {
     if(OptionalParameterCount == 0)
@@ -948,6 +956,7 @@ public class ScriptFunctionNode : FunctionNode
     return new DynamicMethodClosure(method, template, bindings, constants);*/
   }
 
+  IMethodInfo generatedMethod;
   long currentIndex;
 
   static Index functionIndex = new Index();

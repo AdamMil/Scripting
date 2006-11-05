@@ -35,6 +35,7 @@
     <Compile Include="AST.cs" />
     <Compile Include="Attributes.cs" />
     <Compile Include="CodeGenerator.cs" />
+    <Compile Include="Complex.cs" />
     <Compile Include="DotNetInterop.cs" />
     <Compile Include="Errors.cs" />
     <Compile Include="Integer.cs" />

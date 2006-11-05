@@ -152,7 +152,7 @@ public static class CG
   public static CustomAttributeBuilder GetCustomAttributeBuilder(Type attributeType)
   {
     if(!attributeType.IsSubclassOf(typeof(Attribute))) throw new ArgumentException();
-    return new CustomAttributeBuilder(typeof(ParamArrayAttribute).GetConstructor(Type.EmptyTypes), Ops.EmptyArray);
+    return new CustomAttributeBuilder(attributeType.GetConstructor(Type.EmptyTypes), Ops.EmptyArray);
   }
 
   public static Type GetImplicitConversionToNumeric(Type type)
@@ -187,6 +187,11 @@ public static class CG
       
       return null;
     }
+  }
+
+  public static Type GetType(object obj)
+  {
+    return obj == null ? null : obj.GetType();
   }
 
   public static bool HasImplicitConversion(Type from, Type to)
