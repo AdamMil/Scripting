@@ -6,6 +6,7 @@ using Scripting;
 namespace Scripting.AST
 {
 
+#region IParser
 /// <summary>An interface that represents a parser.</summary>
 public interface IParser
 {
@@ -25,5 +26,57 @@ public interface IParser
   /// </remarks>
   ASTNode ParseExpression();
 }
+#endregion
+
+#region ParserBase
+/// <summary>A simple base class for parsers.</summary>
+public abstract class ParserBase : IParser
+{
+  protected ParserBase(CompilerState state, IScanner scanner)
+  {
+    if(state == null || scanner == null) throw new ArgumentNullException();
+    this.state   = state;
+    this.scanner = scanner;
+  }
+
+  public abstract ASTNode ParseProgram();
+  public abstract ASTNode ParseOne();
+  public abstract ASTNode ParseExpression();
+
+  protected CompilerState CompilerState
+  {
+    get { return state; }
+  }
+
+  protected IScanner Scanner
+  {
+    get { return scanner; }
+  }
+
+  /// <summary>Adds an output message to <see cref="CompilerState"/>.</summary>
+  protected virtual void AddMessage(OutputMessage message)
+  {
+    if(message == null) throw new ArgumentNullException();
+    if(CompilerState != null)
+    {
+      CompilerState.Messages.Add(message);
+    }
+    // otherwise if we have no compiler state, we can't add the message to anything, but we'll throw on error messages
+    else if(message.Type == OutputMessageType.Error)
+    {
+      throw new SyntaxErrorException(message);
+    }
+  }
+
+  /// <summary>Adds a new error message using the given source name and position.</summary>
+  protected void AddErrorMessage(string sourceName, FilePosition position, string message)
+  {
+    AddMessage(new OutputMessage(OutputMessageType.Error, message, sourceName, position));
+  }
+
+  readonly CompilerState state;
+  readonly IScanner scanner;
+}
+#endregion
 
 } // namespace Scripting.Parsing
