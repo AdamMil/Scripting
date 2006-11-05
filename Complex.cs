@@ -31,6 +31,11 @@ public struct Complex
   {
     get { return Math.Sqrt(Real*Real + Imaginary*Imaginary); }
   }
+  
+  public Complex Inverse
+  {
+    get { return new Complex(-Imaginary, Real); }
+  }
 
   public override bool Equals(object obj)
   {
@@ -54,7 +59,86 @@ public struct Complex
     return sb.ToString();
   }
 
-  public Complex Pow(Complex power)
+  public double Real, Imaginary;
+
+  public static Complex Acos(Complex z)
+  {
+    return Math.PI/2 - Asin(z);
+  }
+
+  public static Complex Asin(Complex z)
+  {
+    z = Log(z.Inverse + Sqrt(1 - z*z));
+    return new Complex(z.Imaginary, -z.Real);
+  }
+
+  public static Complex Atan(Complex z)
+  {
+    Complex iz = z.Inverse;
+    z = Log(1+iz) - Log(1-iz);
+    return new Complex(-z.Imaginary*0.5, -z.Real*0.5);
+  }
+
+  public static Complex Cos(Complex z) // cos(z) == (exp(i*z) + exp(-i*z)) / 2.
+  {
+    z = Exp(z.Inverse) + Exp(new Complex(z.Imaginary, -z.Real));
+    return new Complex(z.Real*0.5, z.Imaginary*0.5);
+  }
+
+  public static Complex Cosh(Complex z) // cosh(z) == (exp(z) + exp(-z)) / 2
+  {
+    z = Exp(z) + Exp(-z);
+    return new Complex(z.Real*0.5, z.Imaginary*0.5);
+  }
+
+  public static Complex Sin(Complex z) // sin(z) = (exp(i*z) - exp(-i*z)) / (2*i)
+  {
+    z = Exp(z.Inverse) - Exp(new Complex(z.Imaginary, -z.Real));
+    return new Complex(z.Imaginary*0.5, -z.Real*0.5);
+  }
+
+  public static Complex Sinh(Complex z) // cosh(z) == (exp(z) - exp(-z)) / 2
+  {
+    z = Exp(z) - Exp(-z);
+    return new Complex(z.Real*0.5, z.Imaginary*0.5);
+  }
+
+  public static Complex Tan(Complex z) // tan(z) == sin(z) / cos(z)
+  {
+    Complex left = Exp(z.Inverse), right = Exp(new Complex(z.Imaginary, -z.Real));
+    Complex sinb = (left-right);
+    return new Complex(sinb.Imaginary, -sinb.Real) / (left+right);
+  }
+
+  public static Complex Exp(Complex power) // exp(z) == pow(e, z)
+  {
+    if(power.Imaginary == 0)
+    {
+      return new Complex(Math.Exp(power.Real));
+    }
+    else
+    {
+      double length = Math.Exp(power.Real);
+      return new Complex(length*Math.Cos(power.Imaginary), length*Math.Sin(power.Imaginary));
+    }
+  }
+
+  public static Complex Log(Complex z)
+  {
+    return new Complex(Math.Log(z.Magnitude), z.Angle);
+  }
+
+  public static Complex Log10(Complex z)
+  {
+    return new Complex(Math.Log10(z.Magnitude), z.Angle);
+  }
+
+  public static Complex Log(Complex z, double newBase)
+  {
+    return new Complex(Math.Log(z.Magnitude, newBase), z.Angle);
+  }
+
+  public static Complex Pow(Complex z, Complex power)
   {
     double real, imag;
 
@@ -63,14 +147,14 @@ public struct Complex
       real = 1;
       imag = 0;
     }
-    else if(Real == 0 && Imaginary == 0)
+    else if(z.Real == 0 && z.Imaginary == 0)
     {
       if(power.Imaginary != 0 || power.Real < 0) throw new DivideByZeroException("Complex Pow(): division by zero");
       real = imag = 0;
     }
     else
     {
-      double vabs = Magnitude, length = Math.Pow(vabs, power.Real), angle = Angle, phase = angle*power.Real;
+      double vabs = z.Magnitude, length = Math.Pow(vabs, power.Real), angle = z.Angle, phase = angle*power.Real;
       if(power.Imaginary != 0)
       {
         length /= Math.Exp(angle*power.Imaginary);
@@ -83,53 +167,21 @@ public struct Complex
     return new Complex(real, imag);
   }
 
-  public Complex Pow(double power)
+  public static Complex Pow(Complex z, double power)
   {
-    return Pow(new Complex(power));
+    return Pow(z, new Complex(power));
   }
 
-  public double Real, Imaginary;
-
-  public static Complex Acos(Complex z)
+  public static Complex Pow(double z, Complex power)
   {
-    return Math.PI/2 - Asin(z);
+    return Pow(new Complex(z), power);
   }
 
-  // TODO: i suspect that these naive implementations have problems with certain edge cases
-  public static Complex Asin(Complex z)
+  public static Complex Sqrt(Complex z)
   {
-    Complex iz = new Complex(-z.Imaginary, z.Real);
-    z = Log(iz + Sqrt(1 - z*z));
-    return new Complex(z.Imaginary, -z.Real);
-  }
+    if(z.Imaginary == 0) return new Complex(Math.Sqrt(z.Real));
 
-  public static Complex Atan(Complex z)
-  {
-    Complex iz = new Complex(-z.Imaginary, z.Real);
-    z = Log(1+iz) - Log(1-iz);
-    return new Complex(z.Imaginary/2, -z.Real/2);
-  }
-
-  public static Complex Log(Complex c)
-  {
-    return new Complex(Math.Log(c.Magnitude), c.Angle);
-  }
-
-  public static Complex Log10(Complex c)
-  {
-    return new Complex(Math.Log10(c.Magnitude), c.Angle);
-  }
-
-  public static Complex Pow(double a, Complex b)
-  {
-    return new Complex(a).Pow(b);
-  }
-
-  public static Complex Sqrt(Complex c)
-  {
-    if(c.Imaginary == 0) return new Complex(Math.Sqrt(c.Real));
-
-    double r = c.Magnitude, y = Math.Sqrt((r-c.Real)/2), x = c.Imaginary/(2*y);
+    double r = z.Magnitude, y = Math.Sqrt((r-z.Real)*0.5), x = z.Imaginary/(2*y);
     return x<0 ? new Complex(-x, -y) : new Complex(x, y);
   }
 
