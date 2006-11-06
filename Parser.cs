@@ -32,10 +32,9 @@ public interface IParser
 /// <summary>A simple base class for parsers.</summary>
 public abstract class ParserBase : IParser
 {
-  protected ParserBase(CompilerState state, IScanner scanner)
+  protected ParserBase(IScanner scanner)
   {
-    if(state == null || scanner == null) throw new ArgumentNullException();
-    this.state   = state;
+    if(scanner == null) throw new ArgumentNullException();
     this.scanner = scanner;
   }
 
@@ -45,7 +44,7 @@ public abstract class ParserBase : IParser
 
   protected CompilerState CompilerState
   {
-    get { return state; }
+    get { return CompilerState.Current; }
   }
 
   protected IScanner Scanner
@@ -74,7 +73,6 @@ public abstract class ParserBase : IParser
     AddMessage(new OutputMessage(OutputMessageType.Error, message, sourceName, position));
   }
 
-  readonly CompilerState state;
   readonly IScanner scanner;
 }
 #endregion

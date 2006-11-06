@@ -48,6 +48,7 @@
     <Compile Include="Runtime.cs" />
     <Compile Include="Scanner.cs" />
     <Compile Include="Slots.cs" />
+    <Compile Include="SnippetMaker.cs" />
     <Compile Include="Stages.cs" />
     <Compile Include="TypeGenerator.cs" />
   </ItemGroup>

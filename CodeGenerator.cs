@@ -149,6 +149,11 @@ public static class CG
     return GetCommonBaseType(ASTNode.GetNodeTypes(nodes));
   }
 
+  public static Type GetCommonBaseType(IList<ASTNode> nodes)
+  {
+    return GetCommonBaseType(ASTNode.GetNodeTypes(nodes));
+  }
+
   public static CustomAttributeBuilder GetCustomAttributeBuilder(Type attributeType)
   {
     if(!attributeType.IsSubclassOf(typeof(Attribute))) throw new ArgumentException();
@@ -458,13 +463,20 @@ public class CodeGenerator
   /// <remarks>Returns the type of the array created.</remarks>
   public Type EmitArray(params ASTNode[] nodes)
   {
+    return EmitArray((IList<ASTNode>)nodes);
+  }
+
+  /// <summary>Emits a set of nodes as an array using the most specific type possible.</summary>
+  /// <remarks>Returns the type of the array created.</remarks>
+  public Type EmitArray(IList<ASTNode> nodes)
+  {
     Type elementType = CG.GetCommonBaseType(nodes);
     EmitArray(nodes, elementType);
     return elementType.MakeArrayType();
   }
 
   /// <summary>Emits a set of nodes as an array, converting each node to the given element type.</summary>
-  public void EmitArray(ASTNode[] nodes, Type elementType)
+  public void EmitArray(IList<ASTNode> nodes, Type elementType)
   {
     // if the element type is a primitive and all the nodes are constant, we can emit the array in a compact form.
     // EmitConstant() already knows how to do that, so we'll call it to do the work.
@@ -474,8 +486,8 @@ public class CodeGenerator
     }
     else
     {
-      EmitNewArray(elementType, nodes.Length);
-      for(int i=0; i<nodes.Length; i++)
+      EmitNewArray(elementType, nodes.Count);
+      for(int i=0; i<nodes.Count; i++)
       {
         EmitDup();
         EmitInt(i);
@@ -574,12 +586,7 @@ public class CodeGenerator
     }
     else
     {
-      if(constantCache == null)
-      {
-        constantCache = new ConstantCache(this);
-      }
-
-      constantCache.GetSlot(value).EmitGet(this);
+      GetCachedConstantSlot(value).EmitGet(this);
     }
   }
   
@@ -1178,6 +1185,12 @@ public class CodeGenerator
     EmitArray(nodes, typeof(object));
   }
 
+  /// <summary>Emits a set of nodes as an array with an element type of <see cref="System.Object"/>.</summary>
+  public void EmitObjectArray(IList<ASTNode> nodes)
+  {
+    EmitArray(nodes, typeof(object));
+  }
+
   /// <summary>Emits a pop opcode, which removes the topmost item from the evaluation stack.</summary>
   public void EmitPop()
   {
@@ -1301,13 +1314,25 @@ public class CodeGenerator
   {
     Type type = desiredType;
     node.Emit(this, ref type);
-    EmitSafeConversion(type, desiredType);
+    EmitRuntimeConversion(type, desiredType);
+  }
+  
+  public void EmitTypedOperator(Operator op, Type desiredType, params ASTNode[] nodes)
+  {
+    EmitTypedOperator(op, desiredType, (IList<ASTNode>)nodes);
+  }
+
+  public void EmitTypedOperator(Operator op, Type desiredType, IList<ASTNode> nodes)
+  {
+    Type type = desiredType;
+    op.Emit(this, nodes, ref type);
+    EmitRuntimeConversion(type, desiredType);
   }
 
   public void EmitTypedSlot(Slot slot, Type desiredType)
   {
     slot.EmitGet(this);
-    EmitSafeConversion(slot.Type, desiredType);
+    EmitRuntimeConversion(slot.Type, desiredType);
   }
 
   /// <summary>Emits code to convert a value from one type to another. This method attempts all the same conversions
@@ -1341,6 +1366,15 @@ public class CodeGenerator
       throw new CompileTimeException("Node emitted in a void context must not visibly alter the stack.");
     }
   }
+  
+  /// <summary>Emits a collection of nodes in a void context, meaning that the evaluation stack will be unchanged.</summary>
+  public void EmitVoids(ICollection<ASTNode> nodes)
+  {
+    foreach(ASTNode node in nodes)
+    {
+      EmitVoid(node);
+    }
+  }
 
   public void Finish()
   {
@@ -1372,6 +1406,17 @@ public class CodeGenerator
   public object[] GetCachedNonBindings()
   {
     return constantCache == null ? new object[0] : constantCache.GetNonBindings();
+  }
+
+  /// <summary>Returns a slot that holds the given value. The slot and its value should be treated as read-only.</summary>
+  public Slot GetCachedConstantSlot(object value)
+  {
+    if(constantCache == null)
+    {
+      constantCache = new ConstantCache(this);
+    }
+
+    return constantCache.GetSlot(value);
   }
 
   /// <summary>Marks the current method as being a generator method. This must be done before any code is emitted or
@@ -1620,6 +1665,8 @@ public class CodeGenerator
 
     public Slot GetSlot(object value)
     {
+      if(value == null) throw new ArgumentNullException();
+
       List<int> indices;
       if(indexLookup.TryGetValue(value.GetType(), out indices))
       {
@@ -1752,7 +1799,17 @@ public class CodeGenerator
 
     static void EmitConstantValue(object value, CodeGenerator cg)
     {
-      cg.EmitConstant(value);
+      if(value is Binding)
+      {
+        Binding binding = (Binding)value;
+        cg.EmitFieldGet(typeof(TopLevel), "Current");
+        cg.EmitString(binding.Name);
+        cg.EmitCall(typeof(TopLevel), "GetBinding");
+      }
+      else
+      {
+        cg.EmitConstant(value);
+      }
     }
 
     static readonly Slot  bindingsArraySlot =

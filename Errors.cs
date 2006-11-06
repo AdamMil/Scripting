@@ -141,6 +141,11 @@ public class OutputMessage
     this.Exception = exception;
   }
 
+  public override string ToString()
+  {
+    return string.Format("{0}({1},{2}): {3}", SourceName, Position.Line, Position.Column, Message);
+  }
+
   /// <summary>The source file name related to the error, if available.</summary>
   public string SourceName;
   /// <summary>The position within the source file related to the error, if available.</summary>

@@ -325,7 +325,7 @@ public sealed class FieldSlot : Slot
 
   public override void EmitSet(CodeGenerator cg, Type typeOnStack)
   {
-    cg.EmitSafeConversion(typeOnStack, Type);
+    cg.EmitRuntimeConversion(typeOnStack, Type);
     if(Instance == null)
     {
       cg.EmitFieldSet(Field);
@@ -424,7 +424,7 @@ public sealed class LocalSlot : Slot
 
   public override void EmitSet(CodeGenerator cg, Type typeOnStack)
   {
-    cg.EmitSafeConversion(typeOnStack, Type);
+    cg.EmitRuntimeConversion(typeOnStack, Type);
     cg.ILG.Emit(OpCodes.Stloc, builder);
   }
 
@@ -519,7 +519,7 @@ public sealed class ParameterSlot : Slot
     if(IsByRef)
     {
       Slot temp = cg.AllocLocalTemp(Type);
-      cg.EmitSafeConversion(typeOnStack, Type);
+      cg.EmitRuntimeConversion(typeOnStack, Type);
       temp.EmitSet(cg, Type);
 
       cg.EmitArgGet(ArgIndex);
@@ -588,11 +588,108 @@ public sealed class ThisSlot : Slot
 
   public override void EmitSet(CodeGenerator cg, Type typeOnStack)
   {
-    cg.EmitSafeConversion(typeOnStack, Type);
+    cg.EmitRuntimeConversion(typeOnStack, Type);
     cg.ILG.Emit(OpCodes.Starg, 0);
   }
 
   Type type;
+}
+#endregion
+
+#region TopLevelSlot
+public sealed class TopLevelSlot : Slot
+{
+  public TopLevelSlot(string name) : this(name, typeof(object)) { }
+  public TopLevelSlot(string name, Type type)
+  {
+    if(name == null || type == null) throw new ArgumentNullException();
+    this.Name = name;
+    this.type = type;
+  }
+
+  public override bool CanGetAddr
+  {
+    get { return type == typeof(object); }
+  }
+
+  public override bool CanRead
+  {
+    get { return true; }
+  }
+
+  public override bool CanWrite
+  {
+    get { return true; }
+  }
+
+  public override Type Type
+  {
+    get { return type; }
+  }
+
+  public override void EmitGet(CodeGenerator cg)
+  {
+    EmitBinding(cg);
+    if(cg.TypeGen.Assembly.IsDebug) cg.EmitCall(typeof(Ops), "CheckBinding");
+    cg.EmitFieldGet(valueField);
+    cg.EmitUnsafeConversion(typeof(object), type);
+  }
+
+  public override void EmitGetAddr(CodeGenerator cg)
+  {
+    if(type != typeof(object)) throw new NotSupportedException("Only the address of an Object slot can be retrieved.");
+    if(cg.TypeGen.Assembly.IsDebug) cg.EmitCall(typeof(Ops), "CheckBinding");
+    cg.EmitFieldGetAddr(valueField);
+  }
+
+  public override void EmitSet(CodeGenerator cg, Type typeOnStack)
+  {
+    cg.EmitRuntimeConversion(typeOnStack, type);
+    cg.EmitSafeConversion(type, typeof(object));
+    Slot temp = cg.AllocLocalTemp(typeof(object));
+    temp.EmitSet(cg);
+    EmitBinding(cg);
+    temp.EmitGet(cg);
+    cg.FreeLocalTemp(temp);
+    cg.EmitFieldSet(valueField);
+  }
+
+  public override void EmitSet(CodeGenerator cg, ASTNode valueNode)
+  {
+    EmitBinding(cg);
+    cg.EmitTypedNode(valueNode, type);
+    cg.EmitSafeConversion(type, typeof(object));
+    cg.EmitFieldSet(valueField);
+  }
+
+  public override void EmitSet(CodeGenerator cg, Slot valueSlot)
+  {
+    EmitBinding(cg);
+    cg.EmitTypedSlot(valueSlot, type);
+    cg.EmitSafeConversion(type, typeof(object));
+    cg.EmitFieldSet(valueField);
+  }
+
+  public readonly string Name;
+  
+  void EmitBinding(CodeGenerator cg)
+  {
+    if(binding == null)
+    {
+      if(TopLevel.Current == null)
+      {
+        throw new CompileTimeException("A top-lvele environment is necessary to compile this code.");
+      }
+      binding = cg.GetCachedConstantSlot(TopLevel.Current.GetBinding(Name));
+    }
+
+    binding.EmitGet(cg);
+  }
+
+  readonly Type type;
+  Slot binding;
+  
+  static readonly FieldInfo valueField = typeof(Binding).GetField("Value");
 }
 #endregion
 

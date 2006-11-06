@@ -18,10 +18,9 @@ static class TokenString
 
 public class Scanner : ScannerBase
 {
-  public Scanner(CompilerState state, params string[] sourceNames) : base(state, sourceNames) { }
-  public Scanner(CompilerState state, params TextReader[] sources) : base(state, sources) { }
-  public Scanner(CompilerState state, TextReader[] sources, string[] sourceNames)
-    : base(state, sources, sourceNames) { }
+  public Scanner(params string[] sourceNames) : base(sourceNames) { }
+  public Scanner(params TextReader[] sources) : base(sources) { }
+  public Scanner(TextReader[] sources, string[] sourceNames) : base(sources, sourceNames) { }
 
   protected override bool ReadToken(out Token token)
   {
@@ -295,10 +294,14 @@ public class Scanner : ScannerBase
               token.Type  = TokenString.Symbol;
               token.Value = value;
             }
-            break;
+            
+            goto dontSkip;
           }
         }
-        
+
+        NextChar(); // skip over the character we just read
+        dontSkip:
+
         break;
       }
     }
@@ -386,7 +389,7 @@ public class Scanner : ScannerBase
   void ReadNumber(ref Token token)
   {
     int  radix = 10;
-    char exact = 'i';
+    char exact = '?';
 
     StringBuilder sb = new StringBuilder();
     while(!IsDelimiter(Char))
@@ -401,13 +404,14 @@ public class Scanner : ScannerBase
       if(c == '.')
       {
         token.Type = TokenString.Period;
+        return;
       }
       else if(c == '-' || c == '+')
       {
         token.Value = c.ToString();
         token.Type  = TokenString.Symbol;
+        return;
       }
-      return;
     }
 
     string numString = sb.ToString();

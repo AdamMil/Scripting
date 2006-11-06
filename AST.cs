@@ -346,20 +346,34 @@ public abstract class ASTNode
   /// <summary>Returns true if all nodes are constant.</summary>
   public static bool AreConstant(params ASTNode[] nodes)
   {
+    return AreConstant((IList<ASTNode>)nodes);
+  }
+
+  /// <summary>Returns true if all nodes are constant.</summary>
+  public static bool AreConstant(IList<ASTNode> nodes)
+  {
     foreach(ASTNode node in nodes)
     {
       if(!node.IsConstant) return false;
     }
     return true;
   }
-  
+
+  /// <summary>Evaluates the given nodes and returns the values in an array of <see cref="System.Object"/>.</summary>
+  public static object[] EvaluateNodes(IList<ASTNode> nodes)
+  {
+    object[] array = new object[nodes.Count];
+    for(int i=0; i<nodes.Count; i++) array[i] = nodes[i].Evaluate();
+    return array;
+  }
+
   /// <summary>Evaluates the given nodes, converting each one to the element type. Returns an array containing the
   /// resulting values.
   /// </summary>
-  public static Array EvaluateNodes(ASTNode[] nodes, Type elementType)
+  public static Array EvaluateNodes(IList<ASTNode> nodes, Type elementType)
   {
-    Array array = Array.CreateInstance(elementType, nodes.Length);
-    for(int i=0; i<nodes.Length; i++)
+    Array array = Array.CreateInstance(elementType, nodes.Count);
+    for(int i=0; i<nodes.Count; i++)
     {
       array.SetValue(Ops.ConvertTo(nodes[i].Evaluate(), elementType), i);
     }
@@ -367,9 +381,9 @@ public abstract class ASTNode
   }
 
   /// <summary>Gets the <see cref="ValueType"/> of each node passed and returns the types in an array.</summary>
-  public static Type[] GetNodeTypes(ASTNode[] nodes)
+  public static Type[] GetNodeTypes(IList<ASTNode> nodes)
   {
-    Type[] types = new Type[nodes.Length];
+    Type[] types = new Type[nodes.Count];
     for(int i=0; i<types.Length; i++)
     {
       types[i] = nodes[i].ValueType;
@@ -460,7 +474,7 @@ public class AssignNode : ASTNode
       RHS.Emit(cg, ref rhsType);
       cg.EmitDup();
       LHS.EmitSet(cg, rhsType);
-      cg.EmitSafeConversion(rhsType, desiredType);
+      cg.EmitRuntimeConversion(rhsType, desiredType);
     }
 
     TailReturn(cg);
@@ -481,7 +495,7 @@ public class BlockNode : ASTNode
   public BlockNode() : base(true) { }
   public BlockNode(params ASTNode[] nodes) : base(true)
   {
-    Children.AddRange(nodes);
+    if(nodes != null) Children.AddRange(nodes);
   }
 
   public override Type ValueType
@@ -538,6 +552,17 @@ public class BlockNode : ASTNode
 }
 #endregion
 
+#region ContainerNode
+public class ContainerNode : NonExecutableNode
+{
+  public ContainerNode() : base(true) { }
+  public ContainerNode(params ASTNode[] nodes) : base(true)
+  {
+    if(nodes != null) Children.AddRange(nodes);
+  }
+}
+#endregion
+
 #region FunctionBaseNode
 public abstract class FunctionNode : ASTNode
 {
@@ -551,7 +576,7 @@ public abstract class FunctionNode : ASTNode
     this.returnType = returnType;
     
     Children.Add(body);
-    Children.Add(new BlockNode(parameters));
+    Children.Add(new ContainerNode(parameters));
   }
   
   public ASTNode Body
@@ -637,7 +662,7 @@ public class OpNode : ASTNode
 
   public override void Emit(CodeGenerator cg, ref Type desiredType)
   {
-    Operator.Emit(cg, Children, ref desiredType);
+    cg.EmitTypedOperator(Operator, desiredType, Children);
     TailReturn(cg);
   }
 
@@ -682,6 +707,8 @@ public class ParameterNode : NonExecutableNode
 {
   public ParameterNode(string name) : this(name, typeof(object)) { }
   public ParameterNode(string name, Type valueType) : this(name, valueType, ParameterType.Normal, null) { }
+  public ParameterNode(string name, Type valueType, ParameterType paramType)
+    : this(name, valueType, paramType, null) { }
   public ParameterNode(string name, Type valueType, ParameterType paramType, ASTNode defaultValue)
     : base(true)
   {
@@ -690,6 +717,19 @@ public class ParameterNode : NonExecutableNode
     Type          = valueType;
     ParameterType = paramType;
     DefaultValue  = defaultValue;
+
+    if(paramType != ParameterType.Normal)
+    {
+      if(defaultValue != null) throw new ArgumentException("List and Dict parameters cannot have default values.");
+      if(paramType == ParameterType.List)
+      {
+        Type = CompilerState.Current.Language.ParameterListType;
+      }
+      else if(paramType == ParameterType.Dict)
+      {
+        Type = CompilerState.Current.Language.ParameterDictionaryType;
+      }
+    }
   }
   
   public ASTNode DefaultValue
@@ -786,6 +826,7 @@ public class ParameterNode : NonExecutableNode
 
         case ParameterType.Dict:
           if(hasDict) throw new ArgumentException("Multiple dictionary arguments are not allowed.");
+          hasDict = true;
           break;
       }
     }
@@ -797,7 +838,15 @@ public class ParameterNode : NonExecutableNode
 public class ScriptFunctionNode : FunctionNode
 {
   public ScriptFunctionNode(string name, ParameterNode[] parameters, ASTNode body)
-    : base(name, typeof(object), parameters, body) { }
+    : this(CompilerState.Current.Language, name, parameters, body) { }
+
+  public ScriptFunctionNode(Language language, string name, ParameterNode[] parameters, ASTNode body)
+    : base(name, typeof(object), parameters, body)
+  {
+    Language = language;
+  }
+
+  public readonly Language Language;
 
   public override Type ValueType
   {
@@ -811,6 +860,8 @@ public class ScriptFunctionNode : FunctionNode
     // create the method in the private class
     IMethodInfo method = GetMethod(cg.Assembly);
 
+    if(HasListParameter || HasDictParameter) throw new NotImplementedException(); // method wrappers won't handle this properly
+    
     if(desiredType != typeof(void))
     {
       // create the function wrapper
@@ -819,7 +870,7 @@ public class ScriptFunctionNode : FunctionNode
       cg.ILG.Emit(OpCodes.Ldftn, method.Method);
       cg.EmitBool(true); // isStatic
       cg.EmitNew(wrapperType, typeof(IntPtr), typeof(bool));
-      cg.EmitSafeConversion(ValueType, desiredType);
+      cg.EmitRuntimeConversion(ValueType, desiredType);
     }
 
     TailReturn(cg);
@@ -827,7 +878,7 @@ public class ScriptFunctionNode : FunctionNode
 
   public override object Evaluate()
   {
-    return new InterpretedFunction(Name, GetParameterArray(), Body);
+    return new InterpretedFunction(Language, Name, GetParameterArray(), Body);
   }
   
   public IMethodInfo GetMethod(AssemblyGenerator ag)
@@ -873,7 +924,7 @@ public class ScriptFunctionNode : FunctionNode
         {
           nodes.Add(param.DefaultValue);
         }
-        cg.EmitObjectArray(nodes.ToArray());
+        cg.EmitObjectArray(nodes);
       }
     }
   }
@@ -951,7 +1002,7 @@ public class ScriptFunctionNode : FunctionNode
     object[]  constants = methodCg.GetCachedNonBindings();
     methodCg.Finish();
     
-    FunctionTemplate template = new FunctionTemplate(IntPtr.Zero, Name, GetParameterNames(), GetParameterTypes(),
+    FunctionTemplate template = current language new FunctionTemplate(IntPtr.Zero, Name, GetParameterNames(), GetParameterTypes(),
                                                      RequiredParameterCount, false, false, false);
     return new DynamicMethodClosure(method, template, bindings, constants);*/
   }
@@ -993,7 +1044,7 @@ public class VariableNode : AssignableNode
   {
     AssertValidSlot();
     Slot.EmitGet(cg);
-    cg.EmitSafeConversion(Slot.Type, desiredType);
+    cg.EmitRuntimeConversion(Slot.Type, desiredType);
     TailReturn(cg);
   }
 

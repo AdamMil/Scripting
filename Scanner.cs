@@ -80,10 +80,9 @@ public abstract class ScannerBase : IScanner
   /// <summary>
   /// Initializes the scanner with a list of source names. The source files will be loaded based on these names.
   /// </summary>
-  protected ScannerBase(CompilerState state, params string[] sourceNames)
+  protected ScannerBase(params string[] sourceNames)
   {
     if(sources == null) throw new ArgumentNullException();
-    this.state       = state;
     this.sourceNames = sourceNames;
     ValidateSources();
   }
@@ -92,23 +91,21 @@ public abstract class ScannerBase : IScanner
   /// "&lt;unknown&gt;".
   /// </summary>
   /// <param name="sources"></param>
-  protected ScannerBase(CompilerState state, params TextReader[] sources)
+  protected ScannerBase(params TextReader[] sources)
   {
     if(sources == null) throw new ArgumentNullException();
-    this.state   = state;
     this.sources = sources;
     ValidateSources();
   }
 
   /// <summary>Initializes the scanner with a list of streams and their names.</summary>
-  protected ScannerBase(CompilerState state, TextReader[] sources, string[] sourceNames)
+  protected ScannerBase(TextReader[] sources, string[] sourceNames)
   {
     if(sources == null || sourceNames == null) throw new ArgumentNullException();
     if(sources.Length != sourceNames.Length)
     {
       throw new ArgumentException("Number of source names doesn't match number of sources.");
     }
-    this.state       = state;
     this.sources     = sources;
     this.sourceNames = sourceNames;
     ValidateSources();
@@ -171,7 +168,7 @@ public abstract class ScannerBase : IScanner
   /// <summary>Gets the compiler state passed to the constructor.</summary>
   protected CompilerState CompilerState
   {
-    get { return state; }
+    get { return CompilerState.Current; }
   }
 
   /// <summary>Gets whether a source is loaded and whether <see cref="Source"/>, <see cref="SourceName"/>, etc are
@@ -410,7 +407,6 @@ public abstract class ScannerBase : IScanner
   }
 
   Queue<Token> pushedTokens;
-  CompilerState state;
   string[] sourceNames;
   TextReader[] sources;
   string textData;
