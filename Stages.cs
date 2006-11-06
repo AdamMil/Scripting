@@ -8,18 +8,18 @@ namespace Scripting.AST
 public interface IASTProcessor
 {
   Stage Stage { get; }
-  void Process(CompilerState state, ref ASTNode rootNode);
+  void Process(ref ASTNode rootNode);
 }
 #endregion
 
 #region ASTProcessorCollection
 public sealed class ASTProcessorCollection : Collection<IASTProcessor>
 {
-  public void Process(CompilerState state, ref ASTNode rootNode)
+  public void Process(ref ASTNode rootNode)
   {
     foreach(IASTProcessor stage in this)
     {
-      stage.Process(state, ref rootNode);
+      stage.Process(ref rootNode);
     }
   }
 
@@ -72,7 +72,7 @@ public class TailMarkerStage : IASTProcessor
     get { return Stage.Decorate; }
   }
 
-  public void Process(CompilerState state, ref ASTNode rootNode)
+  public void Process(ref ASTNode rootNode)
   {
     rootNode.MarkTail(initialTail);
   }
@@ -104,11 +104,11 @@ public sealed class ASTDecorator
     return stageCollection;
   }
 
-  public void Process(CompilerState state, ref ASTNode rootNode)
+  public void Process(ref ASTNode rootNode)
   {
     foreach(ASTProcessorCollection stage in stages)
     {
-      if(stage != null) stage.Process(state, ref rootNode);
+      if(stage != null) stage.Process(ref rootNode);
     }
   }
 

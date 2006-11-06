@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using Scripting;
 using Scripting.AST;
+using Scripting.Emit;
+using NetLisp.Runtime;
 
 namespace NetLisp.AST
 {
@@ -14,7 +16,7 @@ enum TokenType
 
 public class Parser : ParserBase
 {
-  public Parser(CompilerState state, IScanner scanner) : base(state, scanner)
+  public Parser(IScanner scanner) : base(scanner)
   {
     NextToken(); // load the first token
   }
@@ -27,7 +29,7 @@ public class Parser : ParserBase
     tokenMap = new System.Collections.Hashtable(names.Length);
     for(int i=0; i<names.Length; i++)
     {
-      tokenMap[names[i]] = types[i];
+      tokenMap[names[i].ToUpperInvariant()] = types[i];
     }
   }
 
@@ -46,7 +48,8 @@ public class Parser : ParserBase
       #region LParen
       case TokenType.LParen: // a list of items (eg, (a b c))
       {
-        if(NextToken() == TokenType.RParen) // empty list (eg, ()) --> nil
+        NextToken();
+        if(tokenType == TokenType.RParen) // empty list (eg, ()) --> nil
         {
           ret = new LiteralNode(null);
         }
@@ -80,19 +83,29 @@ public class Parser : ParserBase
                 break;
               
               case "lambda": // (lambda params form ...) where params is a symbol or a possibly-dotted list of symbols
-                NextToken();
+              { NextToken();
                 bool hasList;
-                return new LambdaNode(ParseLambdaList(out hasList), hasList, ParseBody());
-            
+                ParameterNode[] parameters = ParameterNode.GetParameters(ParseLambdaList(out hasList));
+                if(hasList)
+                {
+                  ParameterNode last = parameters[parameters.Length-1];
+                  parameters[parameters.Length-1] = new ParameterNode(last.Name, typeof(Pair), ParameterType.List);
+                }
+                return new ScriptFunctionNode(null, parameters, ParseBody());
+              }
+
               case "set!": // (set! symbol form [symbol form ...])
                 ret = ParseSet();
                 break;
               
               case "define": // (define symbol value)
+              {
                 NextToken();
-                ret = new DefineNode(ParseSymbolName(), ParseOne());
+                string name = ParseSymbolName();
+                ret = new AssignNode(new VariableNode(name, new TopLevelSlot(name)), ParseOne());
                 break;
-              
+              }
+
               case "vector":
                 NextToken();
                 ret = new VectorNode(ParseNodeList());
@@ -123,7 +136,7 @@ public class Parser : ParserBase
       case TokenType.Symbol:
         if(quoted)
         {
-          ret = new SymbolNode(ParseSymbolName());
+          ret = new LiteralNode(Symbol.Get(ParseSymbolName()));
         }
         else
         {
@@ -132,10 +145,15 @@ public class Parser : ParserBase
         NextToken();
         break;
 
+      case TokenType.Literal:
+        ret = new LiteralNode(token.Value);
+        NextToken();
+        break;
+
       case TokenType.Quote: // a quote, eg 'a
-        if(quoted)
+        if(quoted) // transform (quote 'a) into (quote (quote a))
         {
-          ret = new ListNode(new SymbolNode("quote"), ParseOne()); // transform (quote 'a) into (quote (quote a))
+          ret = new ListNode(new LiteralNode(Symbol.Get("quote")), ParseOne());
         }
         else
         {
@@ -148,16 +166,26 @@ public class Parser : ParserBase
       
       case TokenType.Vector:
         NextToken();
-        ret = new VectorNode(ParseNodeList());
+        if(quoted)
+        {
+          ListNode list = new ListNode();
+          list.ListItems.Add(new LiteralNode(Symbol.Get("vector")));
+          list.ListItems.AddRange(ParseNodeList());
+          ret = list;
+        }
+        else
+        {
+          ret = new VectorNode(ParseNodeList());
+        }
         Consume(TokenType.RParen);
         break;
-    
+
       case TokenType.EOF:
         Unexpected(tokenType);
         break;
 
       default:
-        AddErrorMessage("Unexpected token '{0}'", token.Type);
+        AddErrorMessage(string.Format("Unexpected token '{0}'", token.Type));
         ret = new LiteralNode(null);
         break;
     }
@@ -179,12 +207,6 @@ public class Parser : ParserBase
   void AddErrorMessage(string message)
   {
     AddErrorMessage(token.SourceName, token.Start, message);
-  }
-
-  /// <summary>Adds a new error message using the current source name and position.</summary>
-  void AddErrorMessage(string format, params object[] args)
-  {
-    AddErrorMessage(string.Format(format, args));
   }
 
   /// <summary>Adds a new error message using the current source name and the given position.</summary>
@@ -273,7 +295,7 @@ public class Parser : ParserBase
       }
       else
       {
-        AddErrorMessage("expected 'let' binding, but received '{0}'", token.Type);
+        AddErrorMessage(string.Format("expected 'let' binding, but received '{0}'", token.Type));
         if(!TokenIs(TokenType.RParen)) NextToken(); // attempt a lame recovery
       }
     } while(!TryConsume(TokenType.RParen));

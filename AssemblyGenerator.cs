@@ -9,6 +9,11 @@ using Scripting.AST;
 namespace Scripting.Emit
 {
 
+public abstract class Snippet
+{
+  public abstract object Run();
+}
+
 public sealed class AssemblyGenerator
 {
   public AssemblyGenerator(string moduleName) : this(moduleName, false) { }
@@ -108,7 +113,7 @@ public sealed class AssemblyGenerator
   {
     TypeBuilder builder = Module.DefineType(name, attributes, baseType == null ? null : baseType.DotNetType);
     TypeGenerator tg = new TypeGenerator(this, builder, baseType, null);
-    types.Add(tg);
+    privates.Types.Add(tg);
     return tg;
   }
   #endregion
@@ -116,12 +121,36 @@ public sealed class AssemblyGenerator
   /// <summary>Finalizes all types in the assembly and all global methods and data.</summary>
   public void Finish()
   {
-    foreach(TypeGenerator tg in types)
+    if(privates.Previous != null) throw new InvalidOperationException();
+
+    foreach(TypeGenerator tg in privates.Types)
     {
       tg.FinishType();
     }
 
     Module.CreateGlobalFunctions();
+  }
+
+  public Snippet GenerateSnippet(ASTNode body)
+  {
+    if(body == null) throw new ArgumentNullException();
+
+    privates = new Privates(privates);
+    try
+    {
+      TypeGenerator tg = DefineType(TypeAttributes.Public|TypeAttributes.Sealed, "snippet$"+snippetIndex.Next,
+                                    typeof(Snippet));
+      privates.PrivateClass = tg; // we'll use the snippet itself as the private class
+
+      CodeGenerator cg = tg.DefineMethodOverride("Run");
+      cg.EmitTypedNode(body, typeof(object));
+      cg.Finish();
+
+      foreach(TypeGenerator type in privates.Types) type.FinishType();
+
+      return (Snippet)tg.FinishType().GetConstructor(Type.EmptyTypes).Invoke(null);
+    }
+    finally { privates = privates.Previous; }
   }
 
   /// <summary>Creates an <see cref="ICallable"/> type that will invoke the given method. If the method is not static
@@ -132,9 +161,14 @@ public sealed class AssemblyGenerator
     Signature signature = new Signature(method);
     ITypeInfo wrapperType;
 
-    if(!methodWrappers.TryGetValue(signature, out wrapperType))
+    if(privates.MethodWrappers == null)
     {
-      methodWrappers[signature] = wrapperType =
+      privates.MethodWrappers = new Dictionary<Signature, ITypeInfo>();
+    }
+
+    if(!privates.MethodWrappers.TryGetValue(signature, out wrapperType))
+    {
+      privates.MethodWrappers[signature] = wrapperType =
         DotNetInterop.MakeMethodWrapper(GetPrivateClass(), signature, method, "mwrap$" + wrapperIndex.Next);
     }
     
@@ -144,12 +178,12 @@ public sealed class AssemblyGenerator
   /// <summary>Gets a <see cref="TypeGenerator"/> for private implementation details.</summary>
   public TypeGenerator GetPrivateClass()
   {
-    if(privateClass == null)
+    if(privates.PrivateClass == null)
     {
-      privateClass = DefineType(TypeAttributes.NotPublic, "<Private Implementation Details>");
-      privateClass.MarkAsNonUserCode();
+      privates.PrivateClass = DefineType(TypeAttributes.NotPublic, "<Private Implementation Details>");
+      privates.PrivateClass.MarkAsNonUserCode();
     }
-    return privateClass;
+    return privates.PrivateClass;
   }
 
   /// <summary>Saves the assembly to the path given in the constructor.</summary>
@@ -158,10 +192,18 @@ public sealed class AssemblyGenerator
     Assembly.Save(OutFileName);
   }
 
-  readonly Dictionary<Signature,ITypeInfo> methodWrappers = new Dictionary<Signature,ITypeInfo>();
-  readonly List<TypeGenerator> types = new List<TypeGenerator>();
-  readonly Index wrapperIndex = new Index();
-  TypeGenerator privateClass;
+  sealed class Privates
+  {
+    public Privates(Privates previous) { Previous = previous; }
+
+    public Dictionary<Signature, ITypeInfo> MethodWrappers;
+    public TypeGenerator PrivateClass;
+    public readonly List<TypeGenerator> Types = new List<TypeGenerator>();
+    public readonly Privates Previous;
+  }
+
+  Privates privates = new Privates(null);
+  readonly Index wrapperIndex = new Index(), snippetIndex = new Index();
 
   static string RandomOutputFile()
   {

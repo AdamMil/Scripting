@@ -89,11 +89,45 @@ public static class Ops
   }
   #endregion
   
+  public static Binding CheckBinding(Binding binding)
+  {
+    if(binding.Value == Binding.Unbound) throw new UndefinedVariableException(binding.Name);
+    return binding;
+  }
+
+  public static ICallable ExpectCallable(object obj)
+  {
+    ICallable ret = MakeCallable(obj);
+    if(ret == null) throw new ArgumentException("expected function but received " + TypeName(obj));
+    return ret;
+  }
+
+  public static ICallable MakeCallable(Delegate del)
+  {
+    throw new NotImplementedException();
+  }
+
+  public static ICallable MakeCallable(object obj)
+  {
+    ICallable call = obj as ICallable;
+    if(call != null) return call;
+    
+    Delegate del = obj as Delegate;
+    if(del != null) return MakeCallable(del);
+    
+    return null;
+  }
+
   public static void Swap<T>(ref T a, ref T b)
   {
     T temp = a;
     a = b;
     b = a;
+  }
+
+  public static string TypeName(object obj)
+  {
+    return obj == null ? "[NULL]" : obj.GetType().FullName;
   }
 
   public readonly static object[] EmptyArray = new object[0];

@@ -374,6 +374,12 @@ public class FunctionTemplate
     throw new NotImplementedException();
   }
 
+  public static readonly Type[] ConstructorTypes = new Type[]
+    {
+      typeof(IntPtr), typeof(string), typeof(string[]), typeof(Type[]),
+      typeof(int), typeof(bool), typeof(bool), typeof(bool)
+    };
+
   protected virtual System.Collections.IDictionary MakeKeywordDictionary()
   {
     return new System.Collections.Hashtable();
@@ -394,15 +400,12 @@ public class FunctionTemplate
 #region InterpretedFunction
 public sealed class InterpretedFunction : Function
 {
-  public InterpretedFunction(string name, string[] paramNames, ASTNode body)
-    : this(CompilerState.Current.Language, name, paramNames, false, false, body) { }
+  public InterpretedFunction(Language language, string name, string[] paramNames, ASTNode body)
+    : this(language, name, paramNames, false, false, body) { }
 
   public InterpretedFunction(Language language, string name, string[] paramNames, bool hasList, bool hasDict,
                              ASTNode body)
     : this(language, name, ParameterNode.GetParameters(paramNames), body) { }
-
-  public InterpretedFunction(string name, ParameterNode[] parameters, ASTNode body)
-    : this(CompilerState.Current.Language, name, parameters, body) { }
 
   public InterpretedFunction(Language language, string name, ParameterNode[] parameters, ASTNode body)
   {
@@ -410,9 +413,9 @@ public sealed class InterpretedFunction : Function
     bool hasList, hasDict;
     ParameterNode.Validate(parameters, out numRequired, out numOptional, out hasList, out hasDict);
 
-    Template =
-      language.CreateFunctionTemplate(IntPtr.Zero, name, ParameterNode.GetNames(parameters),
-                                      ParameterNode.GetTypes(parameters), numRequired, hasList, hasDict, false);
+    Template = (FunctionTemplate)language.FunctionTemplateType.GetConstructor(FunctionTemplate.ConstructorTypes)
+                 .Invoke(new object[] { IntPtr.Zero, name, ParameterNode.GetNames(parameters),
+                                        ParameterNode.GetTypes(parameters), numRequired, hasList, hasDict, false });
     Body = body;
 
     if(numOptional != 0)

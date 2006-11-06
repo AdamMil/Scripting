@@ -8,6 +8,7 @@ using Scripting.Runtime;
 namespace Scripting.AST
 {
 
+#region Operator
 public abstract class Operator
 {
   /// <param name="name">The name displayed to the user in diagnostic messages.</param>
@@ -19,6 +20,7 @@ public abstract class Operator
   public readonly string Name;
 
   public abstract void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref Type desiredType);
+  public abstract void EmitThisOperator(CodeGenerator cg);
   public abstract object Evaluate(IList<ASTNode> nodes);
   public abstract Type GetValueType(IList<ASTNode> nodes);
   
@@ -32,16 +34,91 @@ public abstract class Operator
     return Evaluate((IList<ASTNode>)nodes);
   }
 
-  public static readonly ArithmeticOperator UncheckedAdd      = new UncheckedAddOperator();
-  public static readonly ArithmeticOperator UncheckedSubtract = new UncheckedSubtractOperator();
-  public static readonly ArithmeticOperator UncheckedMultiply = new UncheckedMultiplyOperator();
-  public static readonly ArithmeticOperator Divide            = new DivideOperator();
+  public static readonly UncheckedAddOperator      UncheckedAdd       = new UncheckedAddOperator();
+  public static readonly UncheckedSubtractOperator UncheckedSubtract  = new UncheckedSubtractOperator();
+  public static readonly UncheckedMultiplyOperator UncheckedMultiply  = new UncheckedMultiplyOperator();
+  public static readonly DivideOperator            Divide             = new DivideOperator();
+  
+  public static readonly LogicalTruthOperator LogicalTruth = new LogicalTruthOperator();
 }
+#endregion
 
+#region UnaryOperator
 public abstract class UnaryOperator : Operator
 {
   protected UnaryOperator(string name) : base(name) { }
+
+  public override void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref Type desiredType)
+  {
+    if(nodes.Count != 1) throw new ArgumentException();
+    Emit(cg, nodes[0], ref desiredType);
+  }
+
+  public sealed override object Evaluate(IList<ASTNode> nodes)
+  {
+    if(nodes.Count != 1) throw new ArgumentException();
+    return Evaluate(nodes[0].Evaluate());
+  }
+  
+  public sealed override Type GetValueType(IList<ASTNode> nodes)
+  {
+    if(nodes.Count != 1) throw new ArgumentException();
+    return GetValueType(nodes[0]);
+  }
+
+  public abstract void Emit(CodeGenerator cg, ASTNode node, ref Type desiredType);
+  public abstract object Evaluate(object obj);
+  public abstract Type GetValueType(ASTNode node);
 }
+#endregion
+
+#region LogicalTruthOperator
+public class LogicalTruthOperator : UnaryOperator
+{
+  public LogicalTruthOperator() : base("truth") { }
+
+  public override void Emit(CodeGenerator cg, ASTNode node, ref Type desiredType)
+  {
+    Type type = typeof(bool);
+    node.Emit(cg, ref type);
+
+    if(type != typeof(bool)) // if the node didn't give us a nice friendly boolean, we'll have to call Evaluate()
+    {
+      cg.EmitSafeConversion(type, typeof(object));
+      Slot tmp = cg.AllocLocalTemp(typeof(object));
+      tmp.EmitSet(cg);
+      EmitThisOperator(cg);
+      tmp.EmitGet(cg);
+      cg.FreeLocalTemp(tmp);
+      cg.EmitCall(GetType(), "Evaluate", typeof(object));
+      type = typeof(object);
+      
+      if(desiredType == typeof(bool)) // if the desired type is a boolean, we can unbox the object returned by Evaluate
+      {
+        cg.EmitUnsafeConversion(type, desiredType);
+        type = desiredType;
+      }
+    }
+
+    cg.EmitRuntimeConversion(type, desiredType);
+  }
+
+  public override void EmitThisOperator(CodeGenerator cg)
+  {
+    cg.EmitFieldGet(typeof(Operator), "LogicalTruth");
+  }
+
+  public override object Evaluate(object obj)
+  {
+    return obj != null && (!(obj is bool) || (bool)obj); // null and false are false. everything else is true.
+  }
+
+  public override Type GetValueType(ASTNode node)
+  {
+    return typeof(bool);
+  }
+}
+#endregion
 
 public abstract class NaryOperator : Operator
 {
@@ -136,9 +213,13 @@ public abstract class ArithmeticOperator : NaryOperator
         }
 
         // emit a call to the runtime version as a last resort
-        EmitThisOperator(cg);
         cg.EmitSafeConversion(lhs, typeof(object));
-        cg.EmitSafeConversion(rhs, typeof(object));
+        Slot tmp = cg.AllocLocalTemp(typeof(object));
+        tmp.EmitSet(cg);
+        EmitThisOperator(cg);
+        tmp.EmitGet(cg);
+        cg.FreeLocalTemp(tmp);
+        cg.EmitTypedNode(nodes[nodeIndex], typeof(object));
         cg.EmitCall(GetType(), "Evaluate", typeof(object), typeof(object));
         lhs = typeof(object);
       }
@@ -159,7 +240,6 @@ public abstract class ArithmeticOperator : NaryOperator
   }
 
   protected abstract void EmitOp(CodeGenerator cg, bool signed);
-  protected abstract void EmitThisOperator(CodeGenerator cg);
 
   protected bool NormalizeTypesOrCallOverload(ref object a, ref object b, out object value)
   {
@@ -376,9 +456,14 @@ public abstract class ArithmeticOperator : NaryOperator
 #endregion
 
 #region UncheckedAddOperator
-public sealed class UncheckedAddOperator : ArithmeticOperator
+public class UncheckedAddOperator : ArithmeticOperator
 {
   internal UncheckedAddOperator() : base("add", "op_Addition") { }
+
+  public override void EmitThisOperator(CodeGenerator cg)
+  {
+    cg.EmitFieldGet(typeof(Operator), "UncheckedAdd");
+  }
 
   public override object Evaluate(object a, object b)
   {
@@ -406,18 +491,18 @@ public sealed class UncheckedAddOperator : ArithmeticOperator
   {
     cg.ILG.Emit(OpCodes.Add);
   }
-
-  protected override void EmitThisOperator(CodeGenerator cg)
-  {
-    cg.EmitFieldGet(typeof(Operator), "UncheckedAdd");
-  }
 }
 #endregion
 
 #region UncheckedSubtractOperator
-public sealed class UncheckedSubtractOperator : ArithmeticOperator
+public class UncheckedSubtractOperator : ArithmeticOperator
 {
   internal UncheckedSubtractOperator() : base("subtract", "op_Subtraction") { }
+
+  public override void EmitThisOperator(CodeGenerator cg)
+  {
+    cg.EmitFieldGet(typeof(Operator), "UncheckedSubtract");
+  }
 
   public override object Evaluate(object a, object b)
   {
@@ -445,18 +530,18 @@ public sealed class UncheckedSubtractOperator : ArithmeticOperator
   {
     cg.ILG.Emit(OpCodes.Sub);
   }
-
-  protected override void EmitThisOperator(CodeGenerator cg)
-  {
-    cg.EmitFieldGet(typeof(Operator), "UncheckedSubtract");
-  }
 }
 #endregion
 
 #region UncheckedMultiplyOperator
-public sealed class UncheckedMultiplyOperator : ArithmeticOperator
+public class UncheckedMultiplyOperator : ArithmeticOperator
 {
   internal UncheckedMultiplyOperator() : base("multiply", "op_Multiply") { }
+
+  public override void EmitThisOperator(CodeGenerator cg)
+  {
+    cg.EmitFieldGet(typeof(Operator), "UncheckedMultiply");
+  }
 
   public override object Evaluate(object a, object b)
   {
@@ -484,19 +569,18 @@ public sealed class UncheckedMultiplyOperator : ArithmeticOperator
   {
     cg.ILG.Emit(OpCodes.Mul);
   }
-
-  protected override void EmitThisOperator(CodeGenerator cg)
-  {
-    cg.EmitFieldGet(typeof(Operator), "UncheckedMultiply");
-  }
-
 }
 #endregion
 
 #region DivideOperator
-public sealed class DivideOperator : ArithmeticOperator
+public class DivideOperator : ArithmeticOperator
 {
   internal DivideOperator() : base("divide", "op_Division") { }
+
+  public override void EmitThisOperator(CodeGenerator cg)
+  {
+    cg.EmitFieldGet(typeof(Operator), "Divide");
+  }
 
   public override object Evaluate(object a, object b)
   {
@@ -524,12 +608,6 @@ public sealed class DivideOperator : ArithmeticOperator
   {
     cg.ILG.Emit(signed ? OpCodes.Div : OpCodes.Div_Un);
   }
-
-  protected override void EmitThisOperator(CodeGenerator cg)
-  {
-    cg.EmitFieldGet(typeof(Operator), "Divide");
-  }
-
 }
 #endregion
 
