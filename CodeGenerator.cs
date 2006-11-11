@@ -324,8 +324,6 @@ public static class CG
 #region CodeGenerator
 public class CodeGenerator
 {
-  public CodeGenerator(TypeGenerator tg, ConstructorBuilderWrapper cb) : this(tg, cb, cb.Builder.GetILGenerator()) { }
-  public CodeGenerator(TypeGenerator tg, MethodBuilderWrapper mb) : this(tg, mb, mb.Builder.GetILGenerator()) { }
   public CodeGenerator(TypeGenerator tg, IMethodBase mb, ILGenerator ilg)
   {
     Assembly  = tg.Assembly;
@@ -357,6 +355,12 @@ public class CodeGenerator
   public readonly Type AssociatedType;
   public readonly bool IsStatic, IsDynamicMethod;
   
+  /// <summary>Gets whether the code generator is emitting debug code.</summary>
+  public bool IsDebug
+  {
+    get { return Assembly.IsDebug; }
+  }
+
   /// <summary>Gets whether the code generator is creating a generator function.</summary>
   /// <remarks>A generator function is a function that can return at any point and, when called again, will resume
   /// execution where it left off. This is used to implement 'yield' operators, etc.
@@ -403,10 +407,72 @@ public class CodeGenerator
                                      : new LocalSlot(this, ILG.DeclareLocal(type), "tmp$"+localNameIndex++);
   }
 
-  /// <summary>Returns true if <see cref="EmitConstant"/> can emit a value of the given type.</summary>
-  public bool CanEmitConstant(Type type)
+  /// <summary>Allocates a new local variable within the current lexical scope.</summary>
+  /// <param name="name">The name of the local variable. This must be non-empty and unique within the scope, although
+  /// it can be reused within nested scopes.
+  /// </param>
+  /// <param name="type">The type of the variable.</param>
+  /// <returns>A slot that references the variable.</returns>
+  /// <remarks>A lexical scope must have been opened with <see cref="BeginScope"/> before this method can be called.</remarks>
+  public Slot AllocLocalVariable(string name, Type type)
   {
-    return Type.GetTypeCode(type) != TypeCode.Object || typeof(Type).IsAssignableFrom(type) ||
+    if(name == null || type == null) throw new ArgumentNullException();
+    if(string.IsNullOrEmpty(name)) throw new ArgumentException("Name cannot be empty.");
+    if(scopes == null || scopes.Count == 0) throw new InvalidOperationException("Not inside a lexical scope.");
+
+    Dictionary<string,Slot> scope = scopes.Peek();
+    if(scope.ContainsKey(name))
+    {
+      throw new ArgumentException("A variable named '"+name+"' is already defined in this scope.");
+    }
+
+    Slot slot;
+    if(!IsDebug || IsGenerator) // in release mode, we'll reuse local variables by calling AllocLocalTemp.
+    {                           // we'll also do this in a generator because AllocLocalTemp() already handles that well
+      slot = AllocLocalTemp(type);
+    }
+    else // TODO: add a debug mode for generators that creates nicely-named field slots?
+    {
+      slot = new LocalSlot(this, ILG.DeclareLocal(type), name);
+    }
+    scope.Add(name, slot);
+    return slot;
+  }
+
+  /// <summary>Begins a new lexical scope.</summary>
+  /// <remarks>Creating a lexical scope is required before calling <see cref="AllocLocalVariable"/>. Each scope can
+  /// only contain one variable with a given name, but scopes can be nested. All scopes that are opened must be closed
+  /// with a call to <see cref="EndScope"/> before the method is completed with <see cref="Finish"/>.
+  /// </remarks>
+  public void BeginScope()
+  {
+    if(scopes == null) scopes = new Stack<Dictionary<string,Slot>>();
+    scopes.Push(new Dictionary<string,Slot>());
+  }
+
+  /// <summary>Closes a lexical scope opened with <see cref="BeginScope"/>.</summary>
+  /// <remarks>All lexical must be closed the method is completed with <see cref="Finish"/>.</remarks>
+  public void EndScope()
+  {
+    if(scopes == null || scopes.Count == 0) throw new InvalidOperationException("Not in a lexical scope.");
+
+    if(!IsDebug || IsGenerator) // if we're in release or generator mode, the local variables in the scope were
+    {                           // allocated with AllocLocalTemp(), so we need to free them.
+      foreach(Slot temp in scopes.Peek().Values)
+      {
+        FreeLocalTemp(temp);
+      }
+    }
+    
+    scopes.Pop();
+  }
+
+  /// <summary>Returns true if <see cref="EmitConstant"/> can emit a value of the given type.</summary>
+  /// <remarks>If you override this method, you should also override <see cref="EmitConstant"/>.</remarks>
+  public virtual bool CanEmitConstant(Type type)
+  {
+    return Type.GetTypeCode(type) != TypeCode.Object ||
+           type == typeof(Complex) || type == typeof(Integer) || typeof(Type).IsAssignableFrom(type) ||
            type.IsArray && CanEmitConstant(type.GetElementType());
   }
 
@@ -659,9 +725,10 @@ public class CodeGenerator
 
   /// <summary>Emits a constant value onto the stack.</summary>
   /// <remarks> This method does not work on all types. To check if a type can be emitted with this function, use the
-  /// <see cref="CanEmitConstant"/> method.
+  /// <see cref="CanEmitConstant"/> method. If you override this method, you should also override
+  /// <see cref="CanEmitConstant"/>.
   /// </remarks>
-  public void EmitConstant(object value)
+  public virtual void EmitConstant(object value)
   {
     Array array = value as Array;
     if(array != null)
@@ -669,9 +736,9 @@ public class CodeGenerator
       Type elementType = array.GetType().GetElementType();
 
       // primitive arrays can be stored in a compact form and loaded quickly, but this can't be done if we're prevented
-      // from creating new metadata in the assembly (ie, if it's a dynamic method). we don't want to do it for arrays
-      // that are too small, either, though.
-      if(array.Length > 4 && !IsDynamicMethod && elementType.IsPrimitive)
+      // from creating new metadata in the assembly (ie, if it's a dynamic method or snippet). we don't want to do it
+      // for arrays that are too small, either, though.
+      if(array.Length > 4 && elementType.IsPrimitive && !IsDynamicMethod && !Assembly.IsCreatingSnippet)
       {
         // get the array data into a byte array.
         byte[] data = array as byte[]; // if the array is already a byte array, use it.
@@ -680,7 +747,7 @@ public class CodeGenerator
           data = new byte[Marshal.SizeOf(elementType) * array.Length];     // allocate a new array of the right size
           GCHandle handle = GCHandle.Alloc(array, GCHandleType.Pinned);    // pin the array
           Marshal.Copy(handle.AddrOfPinnedObject(), data, 0, data.Length); // copy the data from the array
-          handle.Free(); // unpin the array
+          handle.Free();                                                   // unpin the array
         }
 
         FieldBuilder dataField =
@@ -741,21 +808,43 @@ public class CodeGenerator
           }
           break;
         }
-        case TypeCode.Double:  ILG.Emit(OpCodes.Ldc_R8, (double)value); break;
-        case TypeCode.Empty:   ILG.Emit(OpCodes.Ldnull); break;
-        case TypeCode.Int16:   EmitInt((int)(short)value); break;
-        case TypeCode.Int32:   EmitInt((int)value); break;
-        case TypeCode.Int64:   EmitLong((long)value); break;
-        case TypeCode.SByte:   EmitInt((int)(sbyte)value); break;
-        case TypeCode.Single:  ILG.Emit(OpCodes.Ldc_R4, (float)value); break;
-        case TypeCode.String:  EmitString((string)value); break;
-        case TypeCode.UInt16:  EmitInt((int)(ushort)value); break;
-        case TypeCode.UInt32:  EmitInt((int)(uint)value); break;
-        case TypeCode.UInt64:  EmitLong((long)(ulong)value); break;
+
+        case TypeCode.Double: ILG.Emit(OpCodes.Ldc_R8, (double)value); break;
+        case TypeCode.Empty:  ILG.Emit(OpCodes.Ldnull); break;
+        case TypeCode.Int16:  EmitInt((int)(short)value); break;
+        case TypeCode.Int32:  EmitInt((int)value); break;
+        case TypeCode.Int64:  EmitLong((long)value); break;
+        case TypeCode.SByte:  EmitInt((int)(sbyte)value); break;
+        case TypeCode.Single: ILG.Emit(OpCodes.Ldc_R4, (float)value); break;
+        case TypeCode.String: EmitString((string)value); break;
+        case TypeCode.UInt16: EmitInt((int)(ushort)value); break;
+        case TypeCode.UInt32: EmitInt((int)(uint)value); break;
+        case TypeCode.UInt64: EmitLong((long)(ulong)value); break;
 
         case TypeCode.Object:
         default:
-          if(value is Type)
+          if(value is Complex)
+          {
+            Complex c = (Complex)value;
+            ILG.Emit(OpCodes.Ldc_R8, c.Real);
+            if(c.Imaginary == 0)
+            {
+              EmitNew(typeof(Complex), typeof(double));
+            }
+            else
+            {
+              ILG.Emit(OpCodes.Ldc_R8, c.Imaginary);
+              EmitNew(typeof(Complex), typeof(double), typeof(double));
+            }
+          }
+          else if(value is Integer)
+          {
+            Integer i = (Integer)value;
+            EmitConstant((short)i.Sign);
+            EmitConstant(i.GetInternalData());
+            EmitNew(typeof(Integer), typeof(short), typeof(uint[]));
+          }
+          else if(value is Type)
           {
             EmitType((Type)value);
           }
@@ -791,37 +880,45 @@ public class CodeGenerator
   /// </param>
   public void EmitDefault(Type type)
   {
+    if(type == null || !type.IsValueType) // use null for reference types
+    {
+      ILG.Emit(OpCodes.Ldnull);
+      return;
+    }
+
     switch(Type.GetTypeCode(type))
     {
       case TypeCode.Boolean: case TypeCode.Byte: case TypeCode.Char: case TypeCode.Int16: case TypeCode.Int32:
       case TypeCode.SByte: case TypeCode.UInt16: case TypeCode.UInt32:
         EmitInt(0);
         break;
+
       case TypeCode.DBNull:
         EmitFieldGet(type, "Value"); // DBNull.Value
         break;
+
       case TypeCode.Decimal:
         EmitFieldGet(type, "Zero"); // Decimal.Zero
         break;
+
       case TypeCode.Double:
         ILG.Emit(OpCodes.Ldc_R8, 0.0);
         break;
+
       case TypeCode.Single:
         ILG.Emit(OpCodes.Ldc_R4, 0.0f);
         break;
+
       case TypeCode.Int64: case TypeCode.UInt64:
         EmitLong(0);
         break;
+
       default:
         if(type == typeof(void))
         {
           return;
         }
-        else if(type == null || !type.IsValueType) // null for reference types
-        {
-          ILG.Emit(OpCodes.Ldnull);
-        }
-        else // zero-initialized structs for value types
+        else // it's a struct, so create a zero initialized instance of it
         {
           Slot tmp = AllocLocalTemp(type);
           tmp.EmitGetAddr(this);
@@ -1210,43 +1307,52 @@ public class CodeGenerator
   }
 
   /// <summary>Emits code to convert a value from one type to another. If not enough information is available to
-  /// perform the conversion at compile time, code to perform a runtime conversion will be emitted.
+  /// perform the conversion safely at compile time, code to perform a runtime conversion will be emitted.
   /// </summary>
   public void EmitRuntimeConversion(Type typeOnStack, Type destinationType)
   {
-    if(!TryEmitSafeConversion(typeOnStack, destinationType, false)) // if we couldn't do a compile-time conversion...
+    if(!TryEmitSafeConversion(typeOnStack, destinationType, false))
     {
-      // if the destination type is a pointer, get the type that it points to and convert to that. we'll get the
-      // pointer later via unboxing
-      Type rootType = destinationType;
-      if(rootType.IsPointer || rootType.IsByRef)
-      {
-        rootType = rootType.GetElementType();
-        if(!rootType.IsValueType || rootType.IsPointer || rootType.IsByRef)
-        {
-          throw new ArgumentException(typeOnStack.FullName + " could not be converted to "+destinationType.FullName);
-        }
-      }
-
       EmitSafeConversion(typeOnStack, typeof(object));
-      EmitType(rootType);
-      EmitCall(typeof(Ops), "ConvertTo", typeof(object), typeof(Type));
-      
-      // at this point, the object on the stack is an instance of rootType (potentially boxed)
-      if(rootType.IsValueType) // if the root type is a value type, we can either return the value or a pointer to it
-      {
-        ILG.Emit(OpCodes.Unbox, rootType);
 
-        // if we want the actual value, we'll load it indirectly from the boxed value. otherwise, if we want the
-        // pointer, we'll simply leave it on the stack (as unbox pushes a pointer to the value)
-        if(!destinationType.IsPointer && !destinationType.IsByRef)
-        {
-          EmitIndirectLoad(rootType);
-        }
-      }
-      else if(destinationType != typeof(object)) // otherwise, it's a reference type. perform a downcast if necessary
+      // check for some built-in types and emit smaller code for them
+      if(destinationType == typeof(ICallable))
       {
-        ILG.Emit(OpCodes.Castclass, destinationType);
+        EmitCall(typeof(Ops), "ConvertToCallable");
+      }
+      else // fall back to the general case conversion function if necessary
+      {
+        // if the destination type is a pointer, get the type that it points to and convert to that. we'll get the
+        // pointer later via unboxing
+        Type rootType = destinationType;
+        if(rootType.IsPointer || rootType.IsByRef)
+        {
+          rootType = rootType.GetElementType();
+          if(!rootType.IsValueType || rootType.IsPointer || rootType.IsByRef)
+          {
+            throw new ArgumentException(typeOnStack.FullName + " could not be converted to "+destinationType.FullName);
+          }
+        }
+
+        EmitType(rootType);
+        EmitCall(typeof(Ops), "ConvertTo", typeof(object), typeof(Type));
+
+        // at this point, the object on the stack is an instance of rootType (potentially boxed)
+        if(rootType.IsValueType) // if the root type is a value type, we can either return the value or a pointer to it
+        {
+          ILG.Emit(OpCodes.Unbox, rootType);
+
+          // if we want the actual value, we'll load it indirectly from the pointer. otherwise, if we want the
+          // pointer, we'll simply leave it on the stack.
+          if(!destinationType.IsPointer && !destinationType.IsByRef)
+          {
+            EmitIndirectLoad(rootType);
+          }
+        }
+        else if(destinationType != typeof(object)) // otherwise, it's a reference type. perform a downcast if necessary
+        {
+          ILG.Emit(OpCodes.Castclass, destinationType);
+        }
       }
     }
   }
@@ -1378,6 +1484,10 @@ public class CodeGenerator
 
   public void Finish()
   {
+    if(scopes != null && scopes.Count != 0)
+    {
+      throw new InvalidOperationException("Not all lexical scopes were closed.");
+    }
   }
 
   public void FreeLocalTemp(Slot slot)
@@ -1627,6 +1737,7 @@ public class CodeGenerator
     return true;
   }
 
+  #region ConstantCache
   sealed class ConstantCache
   {
     public ConstantCache(CodeGenerator cg)
@@ -1819,19 +1930,22 @@ public class CodeGenerator
       new FieldSlot(new ThisSlot(typeof(DynamicMethodClosure)),
                     typeof(DynamicMethodClosure).GetField("Constants", CodeGenerator.SearchAll));
   }
-
+  #endregion
+  
   Slot AllocateTemporaryField(Type type)
   {
     return TypeGen.DefineField("tmp$"+localNameIndex++, type);
   }
 
-  const BindingFlags ConstructorSearch = BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance;
+  const BindingFlags ConstructorSearch = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
   const BindingFlags SearchAll = BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance|BindingFlags.Static;
-  
+
   /// <summary>A list of cached constants, grouped by type.</summary>
   ConstantCache constantCache;
   /// <summary>A list of currently unused temporary variables.</summary>
   List<Slot> localTemps, nsTemps;
+  /// <summary>A stack of the current lexical scopes.</summary>
+  Stack<Dictionary<string,Slot>> scopes;
   /// <summary>The current index for naming temporary variables.</summary>
   int localNameIndex;
   /// <summary>Whether or not the current method is a generator method.</summary>

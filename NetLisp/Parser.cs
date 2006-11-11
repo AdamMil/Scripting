@@ -79,11 +79,13 @@ public class Parser : ParserBase
                 break;
             
               case "begin": // (begin form ...)
+                NextToken();
                 ret = ParseBody();
                 break;
               
               case "lambda": // (lambda params form ...) where params is a symbol or a possibly-dotted list of symbols
-              { NextToken();
+              {
+                NextToken();
                 bool hasList;
                 ParameterNode[] parameters = ParameterNode.GetParameters(ParseLambdaList(out hasList));
                 if(hasList)
@@ -91,7 +93,8 @@ public class Parser : ParserBase
                   ParameterNode last = parameters[parameters.Length-1];
                   parameters[parameters.Length-1] = new ParameterNode(last.Name, typeof(Pair), ParameterType.List);
                 }
-                return new ScriptFunctionNode(null, parameters, ParseBody());
+                ret = new ScriptFunctionNode(null, parameters, ParseBody());
+                break;
               }
 
               case "set!": // (set! symbol form [symbol form ...])
@@ -136,13 +139,12 @@ public class Parser : ParserBase
       case TokenType.Symbol:
         if(quoted)
         {
-          ret = new LiteralNode(Symbol.Get(ParseSymbolName()));
+          ret = new SymbolNode(ParseSymbolName());
         }
         else
         {
           ret = new VariableNode(ParseSymbolName());
         }
-        NextToken();
         break;
 
       case TokenType.Literal:
@@ -153,7 +155,7 @@ public class Parser : ParserBase
       case TokenType.Quote: // a quote, eg 'a
         if(quoted) // transform (quote 'a) into (quote (quote a))
         {
-          ret = new ListNode(new LiteralNode(Symbol.Get("quote")), ParseOne());
+          ret = new ListNode(new SymbolNode("quote"), ParseOne());
         }
         else
         {
@@ -169,7 +171,7 @@ public class Parser : ParserBase
         if(quoted)
         {
           ListNode list = new ListNode();
-          list.ListItems.Add(new LiteralNode(Symbol.Get("vector")));
+          list.ListItems.Add(new SymbolNode("vector"));
           list.ListItems.AddRange(ParseNodeList());
           ret = list;
         }
@@ -186,6 +188,7 @@ public class Parser : ParserBase
 
       default:
         AddErrorMessage(string.Format("Unexpected token '{0}'", token.Type));
+        NextToken();
         ret = new LiteralNode(null);
         break;
     }
@@ -245,6 +248,7 @@ public class Parser : ParserBase
   TokenType NextToken()
   {
     lastEndPosition = token.End;
+
     if(!Scanner.NextToken(out token))
     {
       token.Type = "EOF";
@@ -304,11 +308,11 @@ public class Parser : ParserBase
     if(names.Count == 0)
     {
       AddErrorMessage(start, "'let' has no bindings");
-      ret = ParseOne();
+      ret = ParseBody();
     }
     else
     {
-      ret = new LocalBindingNode(names.ToArray(), values.ToArray(), ParseOne());
+      ret = new LocalBindingNode(names.ToArray(), values.ToArray(), ParseBody());
     }
     
     return ret;
@@ -345,7 +349,7 @@ public class Parser : ParserBase
     else if(TryConsume(TokenType.LParen)) // a list of symbols
     {
       List<string> names = new List<string>();
-      while(!TokenIs(TokenType.RParen))
+      while(!TryConsume(TokenType.RParen))
       {
         names.Add(ParseSymbolName());
         if(TryConsume(TokenType.Period)) // a dotted list

@@ -65,7 +65,7 @@ public sealed class TypeGenerator : ITypeInfo
       }
     }
 
-    CodeGenerator cg = new CodeGenerator(this, new ConstructorBuilderWrapper(cb, paramTypes));
+    CodeGenerator cg = CreateCodeGenerator(new ConstructorBuilderWrapper(cb, paramTypes));
     // emit the code to call the parent constructor
     cg.EmitThis();
     for(int i=0; i<parameters.Length; i++) cg.EmitArgGet(i);
@@ -89,7 +89,7 @@ public sealed class TypeGenerator : ITypeInfo
   public CodeGenerator DefineConstructor(MethodAttributes attributes, params Type[] types)
   {
     ConstructorBuilder builder = TypeBuilder.DefineConstructor(attributes, CallingConventions.Standard, types);
-    CodeGenerator cg = new CodeGenerator(this, new ConstructorBuilderWrapper(builder, types));
+    CodeGenerator cg = CreateCodeGenerator(new ConstructorBuilderWrapper(builder, types));
 
     // add the constructor to the list of defined constructors
     if(constructors == null) constructors = new List<IConstructorInfo>();
@@ -108,7 +108,7 @@ public sealed class TypeGenerator : ITypeInfo
   public CodeGenerator DefineDefaultConstructor(MethodAttributes attributes)
   {
     ConstructorBuilder builder = TypeBuilder.DefineDefaultConstructor(attributes);
-    return new CodeGenerator(this, new ConstructorBuilderWrapper(builder, Type.EmptyTypes));
+    return CreateCodeGenerator(new ConstructorBuilderWrapper(builder, Type.EmptyTypes));
   }
 
   public FieldSlot DefineField(string name, Type type)
@@ -147,7 +147,7 @@ public sealed class TypeGenerator : ITypeInfo
     if((attrs&MethodAttributes.Static) != 0) attrs &= ~MethodAttributes.Final; // static methods can't be marked final
     else if(final) attrs |= MethodAttributes.Final;
     MethodBuilder builder = TypeBuilder.DefineMethod(name, attrs, retType, paramTypes);
-    CodeGenerator cg = new CodeGenerator(this, new MethodBuilderWrapper(builder, paramTypes));
+    CodeGenerator cg = CreateCodeGenerator(new MethodBuilderWrapper(builder, paramTypes));
 
     // add the method to the list of defined methods
     if(methods == null) methods = new List<IMethodInfo>();
@@ -212,7 +212,7 @@ public sealed class TypeGenerator : ITypeInfo
 
     // TODO: figure out how to use this properly
     //TypeBuilder.DefineMethodOverride(mb, baseMethod);
-    CodeGenerator cg = new CodeGenerator(this, new MethodBuilderWrapper(mb, parameters));
+    CodeGenerator cg = CreateCodeGenerator(new MethodBuilderWrapper(mb, parameters));
 
     // add the method to the list of defined methods
     if(methods == null) methods = new List<IMethodInfo>();
@@ -470,7 +470,7 @@ public sealed class TypeGenerator : ITypeInfo
     if(initializer == null)
     {
       ConstructorBuilder builder = TypeBuilder.DefineTypeInitializer();
-      initializer = new CodeGenerator(this, new ConstructorBuilderWrapper(builder, Type.EmptyTypes));
+      initializer = CreateCodeGenerator(new ConstructorBuilderWrapper(builder, Type.EmptyTypes));
     }
     return initializer;
   }
@@ -503,6 +503,16 @@ public sealed class TypeGenerator : ITypeInfo
 
   public readonly AssemblyGenerator Assembly;
   public readonly TypeBuilder TypeBuilder;
+
+  CodeGenerator CreateCodeGenerator(ConstructorBuilderWrapper cb)
+  {
+    return CompilerState.Current.Language.CreateCodeGenerator(this, cb, cb.Builder.GetILGenerator());
+  }
+
+  CodeGenerator CreateCodeGenerator(MethodBuilderWrapper mb)
+  {
+    return CompilerState.Current.Language.CreateCodeGenerator(this, mb, mb.Builder.GetILGenerator());
+  }
 
   const BindingFlags InstanceSearch = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
   const BindingFlags SearchAll = BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance|BindingFlags.Static;

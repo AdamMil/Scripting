@@ -26,7 +26,7 @@ public class Scanner : ScannerBase
   {
     token = new Token();
     if(!HasValidSource && !NextSource()) return false; // move to the next data source if necessary
-    
+
     while(true) // while we haven't found a valid token yet
     {
       SkipWhitespace();
@@ -42,8 +42,11 @@ public class Scanner : ScannerBase
       {
         switch(NextChar())
         {
-          case 't': token.Value = true;  token.Type = TokenString.Literal; break; // literal true
-          case 'f': token.Value = false; token.Type = TokenString.Literal; break; // literal false
+          case 't': case 'f': // literal true and false
+            token.Value = (Char == 't');
+            token.Type  = TokenString.Literal;
+            NextChar();
+            break;
 
           case '\\': // character literal
           {
@@ -55,8 +58,6 @@ public class Scanner : ScannerBase
               {
                 sb.Append(Char);
               } while(!IsDelimiter(NextChar()));
-
-              PushBack(Char);
 
               string name = sb.ToString();
               char literal;
@@ -136,13 +137,8 @@ public class Scanner : ScannerBase
           {
             StringBuilder sb = new StringBuilder();
             sb.Append('#').Append(Char);
-            while(true)
+            while(!IsDelimiter(NextChar()))
             {
-              if(IsDelimiter(NextChar()))
-              {
-                PushBack(Char);
-                break;
-              }
               sb.Append(Char);
             }
 
@@ -160,9 +156,12 @@ public class Scanner : ScannerBase
               NextChar();
               if(Char == delim) // possibly end the string if we find the delimiter
               {
-                if(NextChar() != delim) // the only exception is a double delimiter, eg: #"hello "" goodbye"
+                if(NextChar() == delim) // the only exception is a double delimiter, eg: #"hello "" goodbye"
                 {
-                  PushBack(Char);
+                  sb.Append(delim);
+                }
+                else
+                {
                   break;
                 }
               }
@@ -184,22 +183,23 @@ public class Scanner : ScannerBase
           
           case '(': // start of a vector, eg #(a b c)
             token.Type = TokenString.Vector;
+            NextChar();
             break;
 
           case '*': // start of an extended comment, eg #* this is a comment *#
             while(true)
             {
-              if(NextChar() == '*' && NextChar() == '|') break;
+              if(NextChar() == '*' && NextChar() == '#') break;
               if(Char == 0)
               {
                 AddErrorMessage(token.Start, "unterminated extended comment");
                 break;
               }
             }
+            NextChar();
             continue; // restart the token search
 
           case 'b': case 'o': case 'd': case 'x': case 'i': case 'e': // binary, octal, hex, exact, inexact numbers
-            PushBack(Char);
             ReadNumber(ref token);
             break;
         
@@ -232,6 +232,7 @@ public class Scanner : ScannerBase
           char c = NextChar();
           if(c == '"')
           {
+            NextChar();
             break;
           }
           else if(c == '\\')
@@ -263,6 +264,7 @@ public class Scanner : ScannerBase
           case '}':  token.Type = TokenString.RCurly; break;
           case '\'': token.Type = TokenString.Quote; break;
           case '`':  token.Type = TokenString.BackQuote; break;
+
           case ';': // single-line comment
             while(true)
             {
@@ -270,9 +272,11 @@ public class Scanner : ScannerBase
               if(Char == '\n' || Char == 0) break;
             }
             continue; // restart token search
+
           case '\0':
             if(NextSource()) continue; // restart token search
             else return false;
+
           default:
           {
             StringBuilder sb = new StringBuilder();
@@ -281,8 +285,6 @@ public class Scanner : ScannerBase
               sb.Append(Char);
             } while(!IsDelimiter(NextChar()));
 
-            PushBack(Char);
-            
             string value = sb.ToString();
             if(value == "nil")
             {
@@ -349,6 +351,7 @@ public class Scanner : ScannerBase
         int num = 0;
         for(int i=0,limit=(c=='x' ? 2 : 4); i<limit; i++)
         {
+          SaveState();
           c = NextChar();
           if(char.IsDigit(c))
           {
@@ -356,8 +359,8 @@ public class Scanner : ScannerBase
           }
           else if((c<'A' || c>'F') && (c<'a' || c>'f'))
           {
-            if(i==0) AddErrorMessage("expected hex digit");
-            PushBack(Char);
+            if(i == 0) AddErrorMessage("expected hex digit");
+            RestoreState();
             break;
           }
           else
@@ -414,26 +417,30 @@ public class Scanner : ScannerBase
       }
     }
 
-    string numString = sb.ToString();
+    string numString;
 
-    if(char.IsLetter(Char))
+    if(!char.IsLetter(sb[0]))
+    {
+      numString = sb.ToString();
+    }
+    else
     {
       int i;
-      for(i=0; i<numString.Length; i++)
+      for(i=0; i<sb.Length; i++)
       {
-        switch(numString[i])
+        switch(sb[i])
         {
           case 'b': radix = 2; break;
           case 'o': radix = 8; break;
           case 'd': radix = 10; break;
           case 'x': radix = 16; break;
-          case 'e': case 'i': exact = numString[i]; break;
+          case 'e': case 'i': exact = sb[i]; break;
           default: goto doneWithFlags;
         }
       }
 
       doneWithFlags:
-      numString = numString.Substring(i);
+      numString = sb.ToString(i, sb.Length-i);
     }
 
     token.Type = TokenString.Literal;

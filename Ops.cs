@@ -95,27 +95,20 @@ public static class Ops
     return binding;
   }
 
-  public static ICallable ExpectCallable(object obj)
-  {
-    ICallable ret = MakeCallable(obj);
-    if(ret == null) throw new ArgumentException("expected function but received " + TypeName(obj));
-    return ret;
-  }
-
-  public static ICallable MakeCallable(Delegate del)
-  {
-    throw new NotImplementedException();
-  }
-
-  public static ICallable MakeCallable(object obj)
+  public static ICallable ConvertToCallable(object obj)
   {
     ICallable call = obj as ICallable;
     if(call != null) return call;
     
     Delegate del = obj as Delegate;
     if(del != null) return MakeCallable(del);
-    
-    return null;
+
+    throw CantConvert(obj, typeof(ICallable));
+  }
+
+  public static ICallable MakeCallable(Delegate del)
+  {
+    throw new NotImplementedException();
   }
 
   public static void Swap<T>(ref T a, ref T b)
@@ -127,7 +120,17 @@ public static class Ops
 
   public static string TypeName(object obj)
   {
-    return obj == null ? "[NULL]" : obj.GetType().FullName;
+    return obj == null ? "[NULL]" : TypeName(obj.GetType());
+  }
+  
+  public static string TypeName(Type type)
+  {
+    return type.FullName;
+  }
+
+  static InvalidCastException CantConvert(object obj, Type type)
+  {
+    return new InvalidCastException("Can't convert "+TypeName(obj)+" to "+TypeName(type));
   }
 
   public readonly static object[] EmptyArray = new object[0];

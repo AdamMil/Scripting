@@ -1,14 +1,12 @@
 using System;
 using System.IO;
+using System.Reflection.Emit;
+using Scripting.AST;
+using Scripting.Emit;
 using Scripting.Runtime;
 
-namespace Scripting.AST
+namespace Scripting
 {
-
-public enum DecoratorType
-{
-  Compiled, Interpreted
-}
 
 /// <summary>The base class of all languages built on top of the scripting platform.</summary>
 public abstract class Language
@@ -31,6 +29,11 @@ public abstract class Language
   }
 
   public readonly string Name;
+
+  public virtual CodeGenerator CreateCodeGenerator(TypeGenerator typeGen, IMethodBase method, ILGenerator ilGen)
+  {
+    return new CodeGenerator(typeGen, method, ilGen);
+  }
 
   public virtual CompilerState CreateCompilerState()
   {
@@ -85,4 +88,4 @@ public abstract class Language
   }
 }
 
-} // namespace Scripting.AST
+} // namespace Scripting

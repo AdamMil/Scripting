@@ -946,6 +946,20 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
   }
   #endregion
 
+  internal uint[] GetInternalData()
+  {
+    if(data == null || data.Length == length)
+    {
+      return data;
+    }
+    else
+    {
+      uint[] trimmedData = new uint[length];
+      Array.Copy(data, trimmedData, length);
+      return trimmedData;
+    }
+  }
+
   int AbsCompareTo(Integer o)
   {
     return AbsCompare(data, length, o.data, o.length);

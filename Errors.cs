@@ -115,7 +115,7 @@ public class UndefinedVariableException : RuntimeScriptException
 /// <summary>The type of an output message from the compiler.</summary>
 public enum OutputMessageType
 {
-  Warning, Error
+  Information, Warning, Error
 }
 
 /// <summary>An output message from the compiler.</summary>
@@ -178,6 +178,18 @@ public class OutputMessageCollection : Collection<OutputMessage>
 
       return false;
     }
+  }
+
+  protected override void InsertItem(int index, OutputMessage item)
+  {
+    if(item == null) throw new ArgumentNullException(); // disallow null messages
+    base.InsertItem(index, item);
+  }
+
+  protected override void SetItem(int index, OutputMessage item)
+  {
+    if(item == null) throw new ArgumentNullException(); // disallow null messages
+    base.SetItem(index, item);
   }
 }
 #endregion

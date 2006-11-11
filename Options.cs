@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Scripting.AST
+namespace Scripting
 {
 
 /// <summary>The base class of all custom compiler options.</summary>
@@ -63,4 +63,4 @@ public class CompilerState
   [ThreadStatic] static Stack<CompilerState> StateStack = new Stack<CompilerState>();
 }
 
-} // namespace Scripting.AST
+} // namespace Scripting
