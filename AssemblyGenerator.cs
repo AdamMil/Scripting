@@ -192,6 +192,13 @@ public sealed class AssemblyGenerator
     Assembly.Save(OutFileName);
   }
 
+  /// <summary>Gets whether the assembly is currently generating a snippet.</summary>
+  /// <remarks>This is used to determine, for instance, whether constant module data can be emitted.</remarks>
+  internal bool IsCreatingSnippet
+  {
+    get { return privates.Previous != null; }
+  }
+
   sealed class Privates
   {
     public Privates(Privates previous) { Previous = previous; }

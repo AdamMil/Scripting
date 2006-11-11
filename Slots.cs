@@ -432,6 +432,81 @@ public sealed class LocalSlot : Slot
 }
 #endregion
 
+#region LocalProxySlot
+/// <summary>Represents a local slot that will be allocated when necessary.</summary>
+/// <remarks>This class exists so that AST processors can create a local slot even though the code generator for the
+/// local slot has not been created yet. The actual local slot will be allocated when it's needed.
+/// </remarks>
+public sealed class LocalProxySlot : Slot
+{
+  public LocalProxySlot(string name, Type type)
+  {
+    if(name == null || type == null) throw new ArgumentNullException();
+    if(string.IsNullOrEmpty(name)) throw new ArgumentException("Name cannot be empty.");
+    this.name = name;
+    this.type = type;
+  }
+
+  public override bool CanGetAddr
+  {
+    get { return true; }
+  }
+
+  public override bool CanRead
+  {
+    get { return true; }
+  }
+
+  public override bool CanWrite
+  {
+    get { return true; }
+  }
+
+  public override Type Type
+  {
+    get { return type; }
+  }
+
+  public override void EmitGet(CodeGenerator cg)
+  {
+    GetSlot(cg).EmitGet(cg);
+  }
+
+  public override void EmitGetAddr(CodeGenerator cg)
+  {
+    GetSlot(cg).EmitGetAddr(cg);
+  }
+
+  public override void EmitSet(CodeGenerator cg, ASTNode valueNode)
+  {
+    GetSlot(cg).EmitSet(cg, valueNode);
+  }
+
+  public override void EmitSet(CodeGenerator cg, Slot valueSlot)
+  {
+    GetSlot(cg).EmitSet(cg, valueSlot);
+  }
+
+  public override void EmitSet(CodeGenerator cg, Type typeOnStack)
+  {
+    GetSlot(cg).EmitSet(cg, typeOnStack);
+  }
+
+  Slot GetSlot(CodeGenerator cg)
+  {
+    if(slot == null)
+    {
+      slot = cg.AllocLocalVariable(name, type);
+    }
+    return slot;
+  }
+
+  readonly string name;
+  readonly Type type;
+  Slot slot;
+}
+#endregion
+
 #region ParameterSlot
 /// <summary>Represents a function parameter in a non-interpreted mode.</summary>
 public sealed class ParameterSlot : Slot

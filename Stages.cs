@@ -12,6 +12,79 @@ public interface IASTProcessor
 }
 #endregion
 
+#region ProcessorBase
+public abstract class ProcessorBase : IASTProcessor
+{
+  public ProcessorBase(DecoratorType type)
+  {
+    DecoratorType = type;
+  }
+
+  public abstract Stage Stage { get; }
+  public abstract void Process(ref ASTNode rootNode);
+
+  protected readonly DecoratorType DecoratorType;
+
+  /// <summary>Adds an output message to <see cref="CompilerState"/>.</summary>
+  protected virtual void AddMessage(OutputMessage message)
+  {
+    CompilerState.Current.Messages.Add(message);
+  }
+
+  /// <summary>Adds a new error message using the given node's source name and position.</summary>
+  protected void AddErrorMessage(ASTNode node, string message)
+  {
+    AddMessage(new OutputMessage(OutputMessageType.Error, message, node.SourceName, node.StartPosition));
+  }
+
+  /// <summary>Adds a new error message using the given node's source name and position.</summary>
+  protected void AddErrorMessage(ASTNode node, string format, params object[] args)
+  {
+    AddErrorMessage(node, string.Format(format, args));
+  }
+
+  /// <summary>Adds a new warning message using the given node's source name and position.</summary>
+  protected void AddWarningMessage(ASTNode node, string message)
+  {
+    AddMessage(new OutputMessage(OutputMessageType.Warning, message, node.SourceName, node.StartPosition));
+  }
+
+  /// <summary>Adds a new warning message using the given node's source name and position.</summary>
+  protected void AddWarningMessage(ASTNode node, string format, params object[] args)
+  {
+    AddWarningMessage(node, string.Format(format, args));
+  }
+}
+#endregion
+
+#region PrefixVisitor
+public abstract class PrefixVisitor : ProcessorBase
+{
+  protected PrefixVisitor(DecoratorType type) : base(type) { }
+
+  public override void Process(ref ASTNode rootNode)
+  {
+    RecursiveVisit(rootNode);
+  }
+  
+  protected abstract bool Visit(ASTNode node);
+  protected virtual void EndVisit(ASTNode node) { }
+
+  protected void RecursiveVisit(ASTNode node)
+  {
+    if(Visit(node))
+    {
+      foreach(ASTNode child in node.Children)
+      {
+        RecursiveVisit(child);
+      }
+    }
+    
+    EndVisit(node);
+  }
+}
+#endregion
+
 #region ASTProcessorCollection
 public sealed class ASTProcessorCollection : Collection<IASTProcessor>
 {
@@ -42,7 +115,7 @@ public enum Stage
   /// <summary>This stage operates upon a parse tree that is true to the source code, but not decorated. Its
   /// responsibilies are to check the semantics of the tree to ensure that the user's source code is valid, and to
   /// decorate the tree (ensure that every <see cref="VariableNode"/> has the correct slot, ensure that
-  /// <see cref="ASTNode.MarkTail">tails are marked</see>, etc).
+  /// tails are marked, etc).
   /// </summary>
   Decorate,
   /// <summary>This stage operates upon a parse tree that is fully decorated and semantically valid, but not yet
@@ -113,6 +186,13 @@ public sealed class ASTDecorator
   }
 
   readonly ASTProcessorCollection[] stages = new ASTProcessorCollection[4]; // there are 4 Stage enum values
+}
+#endregion
+
+#region DecoratorType
+public enum DecoratorType
+{
+  Compiled, Interpreted
 }
 #endregion
 

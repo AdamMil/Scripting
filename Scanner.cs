@@ -138,31 +138,25 @@ public abstract class ScannerBase : IScanner
   /// </summary>
   protected char Char
   {
-    get { return currentChar; }
-  }
-
-  /// <summary>Gets or sets the pushback character.</summary>
-  protected char PushedChar
-  {
-    get { return pushedChar; }
+    get { return sourceState.Char; }
   }
 
   /// <summary>Gets the one-based column index within the current source line.</summary>
   protected int Column
   {
-    get { return column; }
+    get { return sourceState.Position.Column; }
   }
 
   /// <summary>Gets the one-based line index within the current source file.</summary>
   protected int Line
   {
-    get { return line; }
+    get { return sourceState.Position.Line; }
   }
   
   /// <summary>Gets the current position within the source file.</summary>
   protected FilePosition Position
   {
-    get { return new FilePosition(line, column); }
+    get { return sourceState.Position; }
   }
 
   /// <summary>Gets the compiler state passed to the constructor.</summary>
@@ -206,16 +200,7 @@ public abstract class ScannerBase : IScanner
   /// <summary>Adds an output message to <see cref="CompilerState"/>.</summary>
   protected virtual void AddMessage(OutputMessage message)
   {
-    if(message == null) throw new ArgumentNullException();
-    if(CompilerState != null)
-    {
-      CompilerState.Messages.Add(message);
-    }
-    // otherwise if we have no compiler state, we can't add the message to anything, but we'll throw on error messages
-    else if(message.Type == OutputMessageType.Error)
-    {
-      throw new SyntaxErrorException(message);
-    }
+    CompilerState.Messages.Add(message);
   }
   
   /// <summary>Adds a new error message using the current source name and position.</summary>
@@ -248,52 +233,41 @@ public abstract class ScannerBase : IScanner
   {
     AssertValidSource();
     
-    bool wasPushback = false; // true if the character comes from the pushback character
-
-    if(pushedChar != '\0') // if we have a pushback character, use it
+    if(sourceState.DataIndex >= textData.Length) // or, if we've reached the end of input, return the nul character
     {
-      currentChar = pushedChar;
-      pushedChar  = '\0';
-      wasPushback = true;
-    }
-    else if(dataIndex >= textData.Length) // or, if we've reached the end of input, return the nul character
-    {
-      currentChar = '\0';
-      return currentChar;
+      sourceState.Char = '\0';
+      return sourceState.Char;
     }
     else // otherwise, read the next input character
     {
-      currentChar = textData[dataIndex++];
-      column++;
+      sourceState.Char = textData[sourceState.DataIndex++];
+      sourceState.Position.Column++;
     }
 
-    if(currentChar == '\n') // if it's a newline, move the pointer to the next line
+    if(sourceState.Char == '\n') // if it's a newline, move the pointer to the next line
     {
-      previousLineLength = column;
-      line++;
-      column = 0;
+      sourceState.Position.Line++;
+      sourceState.Position.Column = 0;
     }
-    else if(currentChar == '\r')
+    else if(sourceState.Char == '\r')
     {
-      // if it's a carriage return from a CRLF pair, skip over the carriage return. don't look at the array if it's
-      // a pushback character because the data won't necessarily match
-      if(!wasPushback && dataIndex < textData.Length && textData[dataIndex] == '\n')
+      // if it's a carriage return from a CRLF pair, skip over the carriage return.
+      if(sourceState.DataIndex < textData.Length && textData[sourceState.DataIndex] == '\n')
       {
-        dataIndex++;
+        sourceState.DataIndex++;
       }
       // in any case, treat the carriage return like a newline
-      currentChar = '\n';
-      previousLineLength = column;
-      line++;
-      column = 0;
+      sourceState.Char = '\n';
+      sourceState.Position.Line++;
+      sourceState.Position.Column = 0;
     }
     // if it's an embedded nul character, convert it to a space (we're using nul characters to signal EOF)
-    else if(currentChar == '\0')
+    else if(sourceState.Char == '\0')
     {
-      currentChar = ' ';
+      sourceState.Char = ' ';
     }
 
-    return currentChar;
+    return sourceState.Char;
   }
 
   /// <summary>Advances to the next input stream and calls <see cref="NextChar"/> on it.</summary>
@@ -324,39 +298,36 @@ public abstract class ScannerBase : IScanner
       {
         textData = sources[sourceIndex].ReadToEnd();
       }
-      line = 1;
-      column = previousLineLength = 0;
-      pushedChar = '\0';
+      
+      sourceState.DataIndex = 0;
+      sourceState.Position  = new FilePosition(1, 0); // the NextChar() will advance to the first column
+      savedState = sourceState;
       NextChar();
       return true;
-    }
-  }
-
-  /// <summary>Pushes a character back onto the input so that it will be the next character read.</summary>
-  protected void PushBack(char c)
-  {
-    if(pushedChar != 0) throw new InvalidOperationException("A character has already been pushed back.");
-
-    if(c != 0)
-    {
-      // adjust the current position based on the value of the pushed character
-      if(c == '\n' || c == '\r')
-      {
-        column = previousLineLength;
-        line--;
-      }
-      else
-      {
-        column--;
-      }
-
-      pushedChar = c;
     }
   }
 
   /// <summary>Reads the next token from the input.</summary>
   /// <returns>Returns true if the next token was read and false if there are no more tokens in any input stream.</returns>
   protected abstract bool ReadToken(out Token token);
+
+  /// <summary>Saves the state of the current source. This allows lookahead.</summary>
+  /// <remarks>Characters can be read with <see cref="NextChar"/> and then <see cref="RestoreState"/> can be called to
+  /// restore the position within the source to the point where this method was called. There is no stack of sources,
+  /// so it's not required to call <see cref="RestoreState"/>, but you cannot push multiple states either.
+  /// Note that the state cannot be saved and restored across different data sources.
+  /// </remarks>
+  protected void SaveState()
+  {
+    savedState = sourceState;
+  }
+
+  /// <summary>Restores the state of the current source to the way it was when <see cref="SaveState"/> was last called.</summary>
+  /// <remarks>There is no stack of sources so it's not required to call <see cref="RestoreState"/>.</remarks>
+  protected void RestoreState()
+  {
+    sourceState = savedState;
+  }
 
   /// <summary>Skips over whitespace.</summary>
   /// <returns>Returns the next non-whitespace character.</returns>
@@ -370,11 +341,18 @@ public abstract class ScannerBase : IScanner
   /// <returns>Returns the next non-whitespace character.</returns>
   protected char SkipWhitespace(bool skipNewLines)
   {
-    while((skipNewLines || currentChar != '\n') && char.IsWhiteSpace(currentChar))
+    while((skipNewLines || Char != '\n') && char.IsWhiteSpace(Char))
     {
       NextChar();
     }
-    return currentChar;
+    return Char;
+  }
+
+  struct State
+  {
+    public FilePosition Position;
+    public int DataIndex;
+    public char Char;
   }
 
   /// <summary>Asserts that <see cref="NextSource"/> has been called and has moved to a valid source.</summary>
@@ -409,9 +387,9 @@ public abstract class ScannerBase : IScanner
   Queue<Token> pushedTokens;
   string[] sourceNames;
   TextReader[] sources;
+  State sourceState, savedState;
   string textData;
-  int dataIndex, sourceIndex = -1, line, column, previousLineLength;
-  char currentChar, pushedChar;
+  int sourceIndex = -1;
 }
 #endregion
 

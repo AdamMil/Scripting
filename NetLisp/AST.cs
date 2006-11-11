@@ -1,57 +1,109 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
 using Scripting.AST;
 using Scripting.Emit;
 using Scripting.Runtime;
+using NetLisp.Emit;
 using NetLisp.Runtime;
 
 namespace NetLisp.AST
 {
 
-#region NetLispLanguage
-public sealed class NetLispLanguage : Language
+#region VariableSlotResolver
+sealed class VariableSlotResolver : PrefixVisitor
 {
-  NetLispLanguage() : base("NetLisp") { }
+  public VariableSlotResolver(DecoratorType type) : base(type) { }
 
-  public override Type FunctionTemplateType
+  public override Stage Stage
   {
-    get { return typeof(LispFunctionTemplate); }
+    get { return Stage.Decorate; }
   }
 
-  public override ASTDecorator CreateDecorator(DecoratorType type)
+  protected override bool Visit(ASTNode node)
   {
-    ASTDecorator decorator = new ASTDecorator();
-
-    if(type == DecoratorType.Compiled)
+    if(node is VariableNode) // if it's a variable node, set its slot if necessary
     {
-      decorator.AddToBeginningOfStage(new TailMarkerStage());
+      VariableNode var = (VariableNode)node;
+      if(var.Slot == null)
+      {
+        var.Slot = FindSlot(var.Name);
+      }
     }
-    
-    return decorator;
+    else if(node is LocalBindingNode) // if it's a binding node, add the bound variables to the array
+    {
+      LocalBindingNode bind = (LocalBindingNode)node;
+
+      // first visit the initial values, since they'll be executed before the binding takes place
+      foreach(LocalBindingNode.Binding binding in bind.Bindings)
+      {
+        if(binding.InitialValue != null) RecursiveVisit(binding.InitialValue);
+      }
+
+      // now add the new bindings
+      foreach(LocalBindingNode.Binding binding in bind.Bindings)
+      {
+        Slot slot = DecoratorType == DecoratorType.Compiled ?
+          new LocalProxySlot(binding.Name, binding.Type) : (Slot)new InterpretedLocalSlot(binding.Name, binding.Type);
+        slots.Add(new KeyValuePair<string,Slot>(binding.Name, slot));
+
+        binding.Variable.Slot = slot;
+      }
+
+      RecursiveVisit(bind.Body);
+      
+      // remove the bindings we added
+      slots.RemoveRange(slots.Count-bind.Bindings.Count, bind.Bindings.Count);
+      return false;
+    }
+    else if(node is FunctionNode)
+    {
+      FunctionNode func = (FunctionNode)node;
+
+      // first visit the default parameter values, since they'll be executed outside the function body
+      foreach(ParameterNode param in func.Parameters)
+      {
+        if(param.DefaultValue != null) RecursiveVisit(param.DefaultValue);
+      }
+
+      // now add the new bindings
+      foreach(ParameterNode param in func.Parameters)
+      {
+        Slot slot = DecoratorType == DecoratorType.Compiled ?
+          new ParameterSlot(param.Index, param.Type) : (Slot)new InterpretedLocalSlot(param.Name, param.Type);
+        slots.Add(new KeyValuePair<string, Slot>(param.Name, slot));
+      }
+      
+      RecursiveVisit(func.Body);
+
+      // remove the bindings we added
+      slots.RemoveRange(slots.Count-func.Parameters.Count, func.Parameters.Count);
+      return false;
+    }
+
+    return true;
   }
 
-  public override IParser CreateParser(IScanner scanner)
+  Slot FindSlot(string name)
   {
-    return new Parser(scanner);
+    for(int i=slots.Count-1; i>=0; i--) // see if this variable has been defined before
+    {
+      if(string.Equals(name, slots[i].Key, StringComparison.Ordinal))
+      {
+        return slots[i].Value;
+      }
+    }
+
+    if(string.IsNullOrEmpty(name)) throw new ArgumentException("Variable name cannot be empty.");
+
+    // if not, assume it's a global variable reference and insert a slot so we don't keep returning new slot objects
+    Slot global = new TopLevelSlot(name);
+    slots.Insert(0, new KeyValuePair<string,Slot>(name, global));
+    return global;
   }
 
-  public override IScanner CreateScanner(params string[] sourceNames)
-  {
-    return new Scanner(sourceNames);
-  }
-
-  public override IScanner CreateScanner(params System.IO.TextReader[] sources)
-  {
-    return new Scanner(sources);
-  }
-
-  public override IScanner CreateScanner(System.IO.TextReader[] sources, string[] sourceNames)
-  {
-    return new Scanner(sources, sourceNames);
-  }
-
-  public static readonly NetLispLanguage Instance = new NetLispLanguage();
+  List<KeyValuePair<string,Slot>> slots = new List<KeyValuePair<string,Slot>>();
 }
 #endregion
 
@@ -92,7 +144,7 @@ public sealed class CallNode : ASTNode
 
   public override object Evaluate()
   {
-    return Ops.ExpectCallable(Function.Evaluate()).Call(ASTNode.EvaluateNodes(Arguments));
+    return Ops.ConvertToCallable(Function.Evaluate()).Call(ASTNode.EvaluateNodes(Arguments));
   }
 }
 #endregion
@@ -148,21 +200,31 @@ public class IfNode : ASTNode
   {
     cg.EmitTypedOperator(Operator.LogicalTruth, typeof(bool), Condition);
 
-    Label end = cg.ILG.DefineLabel(), falseLabel = IfFalse == null ? end : cg.ILG.DefineLabel();
-    cg.ILG.Emit(OpCodes.Brfalse, falseLabel);
-    cg.EmitTypedNode(IfTrue, desiredType);
-    if(IfFalse != null)
+    Label end = cg.ILG.DefineLabel();
+    Label falseLabel = desiredType == typeof(void) && IfFalse == null ? end : cg.ILG.DefineLabel();
+    Type valueType   = IfFalse == null ? desiredType : ValueType;
+
+    cg.ILG.Emit(OpCodes.Brfalse, falseLabel); // jump to the false branch (or end) if the condition is false
+    cg.EmitTypedNode(IfTrue, valueType);      // emit the true branch
+
+    // emit the false branch
+    if(desiredType != typeof(void) || IfFalse != null)
     {
       cg.ILG.Emit(OpCodes.Br, end);
       cg.ILG.MarkLabel(falseLabel);
-      cg.EmitTypedNode(IfFalse, desiredType);
+      if(IfFalse != null)
+      {
+        cg.EmitTypedNode(IfFalse, valueType);
+      }
+      else if(desiredType != typeof(void))
+      {
+        cg.EmitDefault(valueType);
+      }
     }
 
     cg.ILG.MarkLabel(end);
-    if(IfFalse == null) // if IfFalse is not null, it will handle the return. otherwise, we need to do it
-    {
-      TailReturn(cg);
-    }
+    cg.EmitRuntimeConversion(valueType, desiredType);
+    TailReturn(cg);
   }
 
   public override object Evaluate()
@@ -175,14 +237,6 @@ public class IfNode : ASTNode
     {
       return IfFalse == null ? null : IfFalse.Evaluate();
     }
-  }
-
-  public override void MarkTail(bool tail)
-  {
-    IsTail = tail;
-    Condition.MarkTail(false);
-    IfTrue.MarkTail(tail);
-    if(IfFalse != null) IfFalse.MarkTail(tail);
   }
 }
 #endregion
@@ -282,7 +336,7 @@ public sealed class LocalBindingNode : ASTNode
     
     for(int i=0; i<names.Length; i++)
     {
-      Bindings.Add(new Binding(names[i], inits == null ? null : inits[i], types == null ? types[i] : null));
+      Bindings.Add(new Binding(names[i], inits == null ? null : inits[i], types == null ? null : types[i]));
     }
   }
 
@@ -297,7 +351,7 @@ public sealed class LocalBindingNode : ASTNode
 
     public ASTNode InitialValue
     {
-      get { return Children.Count >= 2 ? null : Children[1]; }
+      get { return Children.Count >= 2 ? Children[1] : null; }
     }
     
     public string Name
@@ -334,6 +388,7 @@ public sealed class LocalBindingNode : ASTNode
 
   public override void Emit(CodeGenerator cg, ref Type desiredType)
   {
+    cg.BeginScope();
     foreach(Binding binding in Bindings)
     {
       if(binding.InitialValue != null)
@@ -348,6 +403,7 @@ public sealed class LocalBindingNode : ASTNode
     }
     
     Body.Emit(cg, ref desiredType);
+    cg.EndScope();
   }
 
   public override object Evaluate()
@@ -392,6 +448,13 @@ public sealed class LocalBindingNode : ASTNode
     foreach(ASTNode node in Bindings) node.MarkTail(false);
     Body.MarkTail(tail);
   }
+}
+#endregion
+
+#region SymbolNode
+public sealed class SymbolNode : LiteralNode
+{
+  public SymbolNode(string name) : base(Symbol.Get(name), true) { }
 }
 #endregion
 

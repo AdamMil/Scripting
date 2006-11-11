@@ -265,6 +265,12 @@ public abstract class ASTNode
   /// </summary>
   public abstract Type ValueType { get; }
 
+  /// <summary>Gets or sets the name of the data source from which the node was parsed.</summary>
+  public string SourceName;
+
+  /// <summary>Gets or sets the start or end position where this node was parsed within the data source.</summary>
+  public FilePosition StartPosition, EndPosition;
+
   public void AddAttribute(Attribute attribute)
   {
     if(attribute == null) throw new ArgumentNullException();
@@ -619,10 +625,13 @@ public abstract class FunctionNode : ASTNode
 #region LiteralNode
 public class LiteralNode : ASTNode
 {
-  public LiteralNode(object value) : base(false)
+  public LiteralNode(object value) : this(value, false) { }
+
+  public LiteralNode(object value, bool emitCachedLiteral) : base(false)
   {
     Value      = value;
     IsConstant = true;
+    cached     = emitCachedLiteral;
   }
 
   public override Type ValueType
@@ -632,7 +641,15 @@ public class LiteralNode : ASTNode
 
   public override void Emit(CodeGenerator cg, ref Type desiredType)
   {
-    cg.EmitConstant(Value, desiredType);
+    if(cached)
+    {
+      cg.EmitCachedConstant(Value);
+      cg.EmitRuntimeConversion(ValueType, desiredType);
+    }
+    else
+    {
+      cg.EmitConstant(Value, desiredType);
+    }
     TailReturn(cg);
   }
 
@@ -642,6 +659,7 @@ public class LiteralNode : ASTNode
   }
   
   public readonly object Value;
+  readonly bool cached;
 }
 #endregion
 
@@ -954,7 +972,7 @@ public class ScriptFunctionNode : FunctionNode
 
   Type[] GetParameterTypes()
   {
-    bool allObject = true; // see if all parameters are object values
+    bool allObject = true;
     foreach(ParameterNode param in Parameters)
     {
       if(param.Type != typeof(object))
@@ -970,7 +988,8 @@ public class ScriptFunctionNode : FunctionNode
   IMethodInfo MakeDotNetMethod(TypeGenerator containingClass)
   {
     string name = "lambda$" + currentIndex + Name;
-    CodeGenerator methodCg = containingClass.DefineStaticMethod(name, ReturnType, GetParameterTypes());
+    CodeGenerator methodCg = containingClass.DefineStaticMethod(name, ReturnType,
+                                                                ParameterNode.GetTypes(GetParameterArray()));
 
     // add names for the parameters
     MethodBuilderWrapper mb = (MethodBuilderWrapper)methodCg.Method;

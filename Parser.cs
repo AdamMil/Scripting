@@ -55,16 +55,7 @@ public abstract class ParserBase : IParser
   /// <summary>Adds an output message to <see cref="CompilerState"/>.</summary>
   protected virtual void AddMessage(OutputMessage message)
   {
-    if(message == null) throw new ArgumentNullException();
-    if(CompilerState != null)
-    {
-      CompilerState.Messages.Add(message);
-    }
-    // otherwise if we have no compiler state, we can't add the message to anything, but we'll throw on error messages
-    else if(message.Type == OutputMessageType.Error)
-    {
-      throw new SyntaxErrorException(message);
-    }
+    CompilerState.Messages.Add(message);
   }
 
   /// <summary>Adds a new error message using the given source name and position.</summary>
