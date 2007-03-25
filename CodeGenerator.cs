@@ -19,47 +19,55 @@ public static class CG
     // build a table of allowable implicit numeric conversions. all integer types are convertible to floating point,
     // decimal, and Integer. all signed integer types are convertible to larger signed integer types. all unsigned
     // integer types are convertible to larger integer types.
-    numericConversions = new SortedList<Type,Type[]>(10, TypeComparer.Instance);
-    numericConversions[typeof(sbyte)] = new Type[]
-      { typeof(short), typeof(int), typeof(long), typeof(Integer), typeof(double), typeof(float), typeof(decimal)
+    numericConversions = new SortedList<ITypeInfo,ITypeInfo[]>(10, TypeComparer.Instance);
+    numericConversions[TypeWrapper.SByte] = new ITypeInfo[]
+      { TypeWrapper.Short, TypeWrapper.Int, TypeWrapper.Long, TypeWrapper.Integer,
+        TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
       };
-    numericConversions[typeof(byte)] = new Type[]
-      { typeof(short), typeof(ushort), typeof(int), typeof(uint), typeof(long), typeof(ulong), typeof(Integer),
-        typeof(double), typeof(float), typeof(decimal)
+    numericConversions[TypeWrapper.Byte] = new ITypeInfo[]
+      { TypeWrapper.Short, TypeWrapper.UShort, TypeWrapper.Int, TypeWrapper.UInt, TypeWrapper.Long, TypeWrapper.ULong,
+        TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
       };
-    numericConversions[typeof(short)] =
-      new Type[] { typeof(int), typeof(long), typeof(Integer), typeof(double), typeof(float), typeof(decimal) };
-    numericConversions[typeof(ushort)] = new Type[]
-      { typeof(int), typeof(uint), typeof(long), typeof(ulong), typeof(Integer),
-        typeof(double), typeof(float), typeof(decimal)
+    numericConversions[TypeWrapper.Short] = new ITypeInfo[]
+      { TypeWrapper.Int, TypeWrapper.Long, TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single,
+        TypeWrapper.Decimal
       };
-    numericConversions[typeof(int)] =
-      new Type[] { typeof(long), typeof(Integer), typeof(double), typeof(float), typeof(decimal) };
-    numericConversions[typeof(uint)] =
-      new Type[] { typeof(long), typeof(ulong), typeof(Integer), typeof(double), typeof(float), typeof(decimal) };
-    numericConversions[typeof(long)] = new Type[] { typeof(Integer), typeof(double), typeof(float), typeof(decimal) };
-    numericConversions[typeof(ulong)] = numericConversions[typeof(long)];
-    numericConversions[typeof(char)] = numericConversions[typeof(ushort)];
-    numericConversions[typeof(float)] = new Type[] { typeof(double) };
+    numericConversions[TypeWrapper.UShort] = new ITypeInfo[]
+      { TypeWrapper.Int, TypeWrapper.UInt, TypeWrapper.Long, TypeWrapper.ULong, TypeWrapper.Integer,
+        TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
+      };
+    numericConversions[TypeWrapper.Int] = new ITypeInfo[]
+      { TypeWrapper.Long, TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
+      };
+    numericConversions[TypeWrapper.UInt] = new ITypeInfo[]
+      { TypeWrapper.Long, TypeWrapper.ULong, TypeWrapper.Integer,
+        TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
+      };
+    numericConversions[TypeWrapper.Long] = new ITypeInfo[]
+      { TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
+      };
+    numericConversions[TypeWrapper.ULong] = numericConversions[TypeWrapper.Long];
+    numericConversions[TypeWrapper.Char] = numericConversions[TypeWrapper.UShort];
+    numericConversions[TypeWrapper.Single] = new ITypeInfo[] { TypeWrapper.Double };
   }
 
-  public static Type GetCommonBaseType(ASTNode a, ASTNode b)
+  public static ITypeInfo GetCommonBaseType(ASTNode a, ASTNode b)
   {
     return GetCommonBaseType(a.ValueType, b.ValueType);
   }
 
-  public static Type GetCommonBaseType(Type a, Type b)
+  public static ITypeInfo GetCommonBaseType(ITypeInfo a, ITypeInfo b)
   {
     if(a == b) return a; // if they are the same type, return it
-    if(a == null || b == null) return typeof(object); // if either is null, return Object
+    if(a == null || b == null) return TypeWrapper.Object; // if either is null, return Object
 
     // if either are void, return the other one.
     if(a == typeof(void)) return b;
     if(b == typeof(void)) return a;
 
-    if(a.IsValueType != b.IsValueType) // if one is reference and the other value, the ultimate base is Object
+    if(a.IsValueType != b.IsValueType)
     {
-      return typeof(object);
+      return TypeWrapper.Object; // if one is reference and the other value, the ultimate base is Object
     }
     
     if(!a.IsValueType) // if they are both reference types
@@ -79,8 +87,8 @@ public static class CG
     }
 
     // check if they implement any common interfaces
-    Type[] interfaces = a.GetInterfaces();
-    foreach(Type iface in b.GetInterfaces())
+    ITypeInfo[] interfaces = a.GetInterfaces();
+    foreach(ITypeInfo iface in b.GetInterfaces())
     {
       if(Array.IndexOf(interfaces, iface) != -1) // if so, return the common interface
       {
@@ -88,28 +96,28 @@ public static class CG
       }
     }
 
-    return typeof(object); // as a last resort, return object
+    return TypeWrapper.Object; // as a last resort, return object
   }
 
-  public static Type GetCommonBaseType(params Type[] types)
+  public static ITypeInfo GetCommonBaseType(params ITypeInfo[] types)
   {
     if(types == null || types.Length == 0) throw new ArgumentException();
 
-    Type type = types[0];
+    ITypeInfo type = types[0];
     bool hadNullOrObject = false; // check if the result was Object because of an explicit null or object type
 
-    if(type == null || type == typeof(object))
+    if(type == null || type == TypeWrapper.Object)
     {
       hadNullOrObject = true;
     }
 
     for(int i=1; i<types.Length && type != typeof(object); i++)
     {
-      Type other = types[i];
-      if(other == null || other == typeof(object))
+      ITypeInfo other = types[i];
+      if(other == null || other == TypeWrapper.Object)
       {
         hadNullOrObject = true;
-        type = typeof(object);
+        type = TypeWrapper.Object;
       }
       else
       {
@@ -120,12 +128,12 @@ public static class CG
     // if it ended up being object and there were more than two base types, there may be a common interface that
     // GetCommonBaseType couldn't see due to being unable to see the whole array... unless it became object because of
     // an explicit null or object type, in which case it's definitive.
-    if(type == typeof(object) && types.Length > 2 && !hadNullOrObject)
+    if(type == TypeWrapper.Object && types.Length > 2 && !hadNullOrObject)
     {
-      List<Type> interfaces = new List<Type>(types[0].GetInterfaces()); // get the interfaces of the first type
+      List<ITypeInfo> interfaces = new List<ITypeInfo>(types[0].GetInterfaces()); // get the interfaces of the first type
       for(int i=1; i<types.Length && interfaces.Count != 0; i++)
       {
-        Type[] otherInterfaces = types[i].GetInterfaces(); // get the interfaces of this type
+        ITypeInfo[] otherInterfaces = types[i].GetInterfaces(); // get the interfaces of this type
         for(int j=interfaces.Count-1; j >= 0; j--) // remove all interfaces that are not common between the two lists
         {
           if(Array.IndexOf(otherInterfaces, interfaces[j]) == -1)
@@ -144,12 +152,12 @@ public static class CG
     return type;
   }
 
-  public static Type GetCommonBaseType(params ASTNode[] nodes)
+  public static ITypeInfo GetCommonBaseType(params ASTNode[] nodes)
   {
     return GetCommonBaseType(ASTNode.GetNodeTypes(nodes));
   }
 
-  public static Type GetCommonBaseType(IList<ASTNode> nodes)
+  public static ITypeInfo GetCommonBaseType(IList<ASTNode> nodes)
   {
     return GetCommonBaseType(ASTNode.GetNodeTypes(nodes));
   }
@@ -160,13 +168,13 @@ public static class CG
     return new CustomAttributeBuilder(attributeType.GetConstructor(Type.EmptyTypes), Ops.EmptyArray);
   }
 
-  public static Type GetImplicitConversionToNumeric(Type type)
+  public static ITypeInfo GetImplicitConversionToNumeric(ITypeInfo type)
   {
-    MethodInfo dummy;
+    IMethodInfo dummy;
     return GetImplicitConversionToNumeric(type, out dummy);
   }
 
-  public static Type GetImplicitConversionToNumeric(Type type, out MethodInfo method)
+  public static ITypeInfo GetImplicitConversionToNumeric(ITypeInfo type, out IMethodInfo method)
   {
     method = null;
 
@@ -176,12 +184,13 @@ public static class CG
     }
     else
     {
-      MethodInfo[] methods = type.GetMethods(BindingFlags.Public|BindingFlags.Static);
-      foreach(MethodInfo mi in methods)
+      IMethodInfo[] methods = type.GetMethods(BindingFlags.Public|BindingFlags.Static);
+      foreach(IMethodInfo mi in methods)
       {
-        if(string.Equals(mi.Name, "op_Implicit", StringComparison.Ordinal) && IsPrimitiveNumeric(mi.ReturnType))
+        if(string.Equals(mi.Name, "op_Implicit", StringComparison.Ordinal) &&
+           IsPrimitiveNumeric(mi.ReturnType.DotNetType))
         {
-          ParameterInfo[] parameters = mi.GetParameters();
+          IParameterInfo[] parameters = mi.GetParameters();
           if(parameters.Length == 1 && parameters[0].ParameterType == type)
           {
             method = mi;
@@ -199,25 +208,30 @@ public static class CG
     return obj == null ? null : obj.GetType();
   }
 
-  public static bool HasImplicitConversion(Type from, Type to)
+  public static ITypeInfo GetTypeInfo(object obj)
+  {
+    return obj == null ? null : TypeWrapper.Get(obj.GetType());
+  }
+
+  public static bool HasImplicitConversion(ITypeInfo from, ITypeInfo to)
   {
     if(to == null) throw new ArgumentNullException();
     if(from == to) return true;
     if(from == null && !to.IsValueType) return true; // null can be converted to reference types
     if(!to.IsValueType && to.IsAssignableFrom(from)) return true; // upcasts can be done implicitly
     
-    if(IsNumeric(from) && IsNumeric(to))
+    if(IsNumeric(from.DotNetType) && IsNumeric(to.DotNetType))
     {
-      Type[] destTypes;
+      ITypeInfo[] destTypes;
       return numericConversions.TryGetValue(from, out destTypes) && Array.IndexOf(destTypes, to) >= 0;
     }
     
     // check if the source type supports implicit conversion to the destination type, or to a primitive type that can
     // be implicitly converted to the destination type
-    MethodInfo mi = from.GetMethod("op_Implicit", BindingFlags.Public|BindingFlags.Static,
-                                   null, new Type[] { to }, null);
-    if(mi != null && (mi.ReturnType == to ||
-                      to.IsPrimitive && mi.ReturnType.IsPrimitive && HasImplicitConversion(mi.ReturnType, to)))
+    IMethodInfo mi = from.GetMethod("op_Implicit", BindingFlags.Public|BindingFlags.Static, to);
+    if(mi != null &&
+       (mi.ReturnType == to || mi.ReturnType.DotNetType.IsPrimitive && to.DotNetType.IsPrimitive &&
+                               HasImplicitConversion(mi.ReturnType, to)))
     {
       return true;
     }
@@ -235,6 +249,11 @@ public static class CG
     return typeCode == TypeCode.Double || typeCode == TypeCode.Single;
   }
 
+  public static bool IsNumeric(ITypeInfo type)
+  {
+    return IsNumeric(type.DotNetType);
+  }
+
   public static bool IsNumeric(Type type)
   {
     return IsPrimitiveNumeric(type) || type == typeof(decimal) || type == typeof(Integer);
@@ -243,6 +262,11 @@ public static class CG
   public static bool IsPrimitiveNumeric(Type type)
   {
     return type.IsPrimitive && IsPrimitiveNumeric(Type.GetTypeCode(type));
+  }
+
+  public static bool IsPrimitiveNumeric(ITypeInfo type)
+  {
+    return IsPrimitiveNumeric(type.DotNetType);
   }
 
   public static bool IsPrimitiveNumeric(TypeCode typeCode)
@@ -256,6 +280,11 @@ public static class CG
       default:
         return false;
     }
+  }
+
+  public static bool IsSigned(ITypeInfo type)
+  {
+    return IsSigned(type.DotNetType);
   }
 
   public static bool IsSigned(Type type)
@@ -275,6 +304,11 @@ public static class CG
     }
   }
   
+  public static int SizeOfPrimitiveNumeric(ITypeInfo type)
+  {
+    return SizeOfPrimitiveNumeric(type.DotNetType);
+  }
+
   public static int SizeOfPrimitiveNumeric(Type type)
   {
     if(!type.IsPrimitive) throw new ArgumentException();
@@ -305,11 +339,11 @@ public static class CG
     else ((TypeBuilder)info).SetCustomAttribute(attributeBuilder);
   }
 
-  sealed class TypeComparer : IComparer<Type>
+  sealed class TypeComparer : IComparer<ITypeInfo>
   {
     TypeComparer() { }
 
-    public int Compare(Type x, Type y)
+    public int Compare(ITypeInfo x, ITypeInfo y)
     {
       return string.CompareOrdinal(x.FullName, y.FullName);
     }
@@ -317,7 +351,7 @@ public static class CG
     public readonly static TypeComparer Instance = new TypeComparer();
   }
 
-  static SortedList<Type,Type[]> numericConversions;
+  static SortedList<ITypeInfo,ITypeInfo[]> numericConversions;
 }
 #endregion
 
@@ -333,28 +367,22 @@ public class CodeGenerator
     IsStatic  = mb.IsStatic;
   }
 
-  /*public CodeGenerator(AssemblyGenerator ag, DynamicMethod dm) : this(ag, dm, null) { }
-  public CodeGenerator(AssemblyGenerator ag, DynamicMethod dm, Type associatedType)
-  {
-    Assembly = ag;
-    Method   = dm;
-    ILG      = dm.GetILGenerator();
-    IsStatic = associatedType == null;
-
-    IsDynamicMethod = true;
-    AssociatedType  = associatedType;
-  }*/
-
   public readonly AssemblyGenerator Assembly;
   public readonly TypeGenerator TypeGen;
   public readonly IMethodBase Method;
   public readonly ILGenerator ILG;
-  /// <summary>The type associated with the current dynamic method. If not null, the method is logically associated
-  /// with the given type, and an instance of the type is passed as the method's first parameter.
-  /// </summary>
-  public readonly Type AssociatedType;
   public readonly bool IsStatic, IsDynamicMethod;
   
+  /// <summary>Gets the slot where the closure created by the current function is stored.</summary>
+  public Slot ClosureSlot
+  {
+    get
+    {
+      if(closureSlot == null) throw new InvalidOperationException("No closure has been created in this function.");
+      return closureSlot;
+    }
+  }
+
   /// <summary>Gets whether the code generator is emitting debug code.</summary>
   public bool IsDebug
   {
@@ -371,7 +399,7 @@ public class CodeGenerator
   }
 
   /// <summary>Allocates an uninitialized temporary variable.</summary>
-  public Slot AllocLocalTemp(Type type)
+  public Slot AllocLocalTemp(ITypeInfo type)
   {
     return AllocLocalTemp(type, false);
   }
@@ -385,7 +413,7 @@ public class CodeGenerator
   /// back in.
   /// </param>
   /// <returns>A <see cref="Slot"/> that can be used to access the variable.</returns>
-  public Slot AllocLocalTemp(Type type, bool keepAround)
+  public Slot AllocLocalTemp(ITypeInfo type, bool keepAround)
   {
     List<Slot> free = keepAround && IsGenerator ? nsTemps : localTemps;
 
@@ -404,7 +432,7 @@ public class CodeGenerator
 
     // otherwise, allocate a new one
     return keepAround && IsGenerator ? AllocateTemporaryField(type)
-                                     : new LocalSlot(this, ILG.DeclareLocal(type), "tmp$"+localNameIndex++);
+             : new LocalSlot(this, ILG.DeclareLocal(type.DotNetType), type, "tmp$"+localNameIndex++);
   }
 
   /// <summary>Allocates a new local variable within the current lexical scope.</summary>
@@ -414,7 +442,7 @@ public class CodeGenerator
   /// <param name="type">The type of the variable.</param>
   /// <returns>A slot that references the variable.</returns>
   /// <remarks>A lexical scope must have been opened with <see cref="BeginScope"/> before this method can be called.</remarks>
-  public Slot AllocLocalVariable(string name, Type type)
+  public Slot AllocLocalVariable(string name, ITypeInfo type)
   {
     if(name == null || type == null) throw new ArgumentNullException();
     if(string.IsNullOrEmpty(name)) throw new ArgumentException("Name cannot be empty.");
@@ -433,7 +461,7 @@ public class CodeGenerator
     }
     else // TODO: add a debug mode for generators that creates nicely-named field slots?
     {
-      slot = new LocalSlot(this, ILG.DeclareLocal(type), name);
+      slot = new LocalSlot(this, ILG.DeclareLocal(type.DotNetType), type, name);
     }
     scope.Add(name, slot);
     return slot;
@@ -527,38 +555,39 @@ public class CodeGenerator
 
   /// <summary>Emits a set of nodes as an array using the most specific type possible.</summary>
   /// <remarks>Returns the type of the array created.</remarks>
-  public Type EmitArray(params ASTNode[] nodes)
+  public ITypeInfo EmitArray(params ASTNode[] nodes)
   {
     return EmitArray((IList<ASTNode>)nodes);
   }
 
   /// <summary>Emits a set of nodes as an array using the most specific type possible.</summary>
   /// <remarks>Returns the type of the array created.</remarks>
-  public Type EmitArray(IList<ASTNode> nodes)
+  public ITypeInfo EmitArray(IList<ASTNode> nodes)
   {
-    Type elementType = CG.GetCommonBaseType(nodes);
+    ITypeInfo elementType = CG.GetCommonBaseType(nodes);
     EmitArray(nodes, elementType);
     return elementType.MakeArrayType();
   }
 
   /// <summary>Emits a set of nodes as an array, converting each node to the given element type.</summary>
-  public void EmitArray(IList<ASTNode> nodes, Type elementType)
+  public void EmitArray(IList<ASTNode> nodes, ITypeInfo elementType)
   {
+    Type dotNetType = elementType.DotNetType;
     // if the element type is a primitive and all the nodes are constant, we can emit the array in a compact form.
     // EmitConstant() already knows how to do that, so we'll call it to do the work.
-    if(elementType.IsPrimitive && ASTNode.AreConstant(nodes))
+    if(dotNetType.IsPrimitive && ASTNode.AreConstant(nodes))
     {
-      EmitConstant(ASTNode.EvaluateNodes(nodes, elementType));
+      EmitConstant(ASTNode.EvaluateNodes(nodes, dotNetType));
     }
     else
     {
-      EmitNewArray(elementType, nodes.Count);
+      EmitNewArray(dotNetType, nodes.Count);
       for(int i=0; i<nodes.Count; i++)
       {
         EmitDup();
         EmitInt(i);
         EmitTypedNode(nodes[i], elementType);
-        EmitArrayStore(elementType);
+        EmitArrayStore(dotNetType);
       }
     }
   }
@@ -718,7 +747,7 @@ public class CodeGenerator
   }
 
   /// <summary>Emits a call to the given method. The method will be found by name and parameter signature.</summary>
-  public void EmitCall(ITypeInfo type, string method, params Type[] paramTypes)
+  public void EmitCall(ITypeInfo type, string method, params ITypeInfo[] paramTypes)
   {
     EmitCall(type.GetMethod(method, SearchAll, paramTypes).Method);
   }
@@ -773,7 +802,7 @@ public class CodeGenerator
     }
     else
     {
-      Type valueType = value == null ? null : value.GetType();
+      Type valueType = CG.GetType(value);
       switch(Type.GetTypeCode(valueType))
       {
         case TypeCode.Boolean: EmitInt((bool)value ? 1 : 0); break;
@@ -859,18 +888,18 @@ public class CodeGenerator
 
   /// <summary>Emits a constant value converted to the given type.</summary>
   /// <remarks>This method will attempt to do the conversion at compile time if possible.</remarks>
-  public void EmitConstant(object value, Type desiredType)
+  public void EmitConstant(object value, ITypeInfo desiredType)
   {
     if(desiredType == null) throw new ArgumentNullException();
 
-    if(CanEmitConstant(desiredType)) // if we can emit the desired type as a constant, do the conversion at compiletime
-    {
-      EmitConstant(Ops.ConvertTo(value, desiredType));
+    if(CanEmitConstant(desiredType.DotNetType)) // if we can emit the desired type as a constant,
+    {                                           // do the conversion at compile time
+      EmitConstant(Ops.ConvertTo(value, desiredType.DotNetType));
     }
     else // otherwise, do the conversion at runtime
     {
       EmitConstant(value);
-      EmitSafeConversion(value == null ? null : value.GetType(), desiredType);
+      EmitSafeConversion(CG.GetTypeInfo(value), desiredType);
     }
   }
 
@@ -878,7 +907,7 @@ public class CodeGenerator
   /// <param name="type">The type of value to emit. If the type is null, a null value will be emitted. If the type
   /// is typeof(void), nothing will be emitted.
   /// </param>
-  public void EmitDefault(Type type)
+  public void EmitDefault(ITypeInfo type)
   {
     if(type == null || !type.IsValueType) // use null for reference types
     {
@@ -886,7 +915,7 @@ public class CodeGenerator
       return;
     }
 
-    switch(Type.GetTypeCode(type))
+    switch(type.TypeCode)
     {
       case TypeCode.Boolean: case TypeCode.Byte: case TypeCode.Char: case TypeCode.Int16: case TypeCode.Int32:
       case TypeCode.SByte: case TypeCode.UInt16: case TypeCode.UInt32:
@@ -922,7 +951,7 @@ public class CodeGenerator
         {
           Slot tmp = AllocLocalTemp(type);
           tmp.EmitGetAddr(this);
-          ILG.Emit(OpCodes.Initobj, type);
+          ILG.Emit(OpCodes.Initobj, type.DotNetType);
           tmp.EmitGet(this);
           FreeLocalTemp(tmp);
         }
@@ -1146,7 +1175,7 @@ public class CodeGenerator
   {
     if(type.IsValueType) // value types don't have default constructors, so we'll call EmitDefault() which handles them
     {
-      EmitDefault(type);
+      EmitDefault(TypeWrapper.Get(type));
     }
     else // otherwise it's a reference type, so emit the default constructor
     {
@@ -1159,13 +1188,13 @@ public class CodeGenerator
   /// </summary>
   public void EmitNew(ITypeInfo type)
   {
-    if(type.DotNetType.IsValueType)
+    if(type.IsValueType)
     {
       EmitNew(type.DotNetType);
     }
     else
     {
-      EmitNew(type.GetConstructor(ConstructorSearch, Type.EmptyTypes));
+      EmitNew(type.GetConstructor(ConstructorSearch, TypeWrapper.EmptyTypes));
     }
   }
 
@@ -1187,7 +1216,7 @@ public class CodeGenerator
   /// <summary>Emits code to create a new instance of an object of the given type using the constructor that takes the
   /// given parameter types.
   /// </summary>
-  public void EmitNew(ITypeInfo type, params Type[] paramTypes)
+  public void EmitNew(ITypeInfo type, params ITypeInfo[] paramTypes)
   {
     if(paramTypes.Length == 0) // if there are no parameters, use the EmitNew(Type) overload, which handles value types
     {
@@ -1279,13 +1308,13 @@ public class CodeGenerator
   /// <summary>Emits a set of nodes as an array with an element type of <see cref="System.Object"/>.</summary>
   public void EmitObjectArray(params ASTNode[] nodes)
   {
-    EmitArray(nodes, typeof(object));
+    EmitArray(nodes, TypeWrapper.Object);
   }
 
   /// <summary>Emits a set of nodes as an array with an element type of <see cref="System.Object"/>.</summary>
   public void EmitObjectArray(IList<ASTNode> nodes)
   {
-    EmitArray(nodes, typeof(object));
+    EmitArray(nodes, TypeWrapper.Object);
   }
 
   /// <summary>Emits a pop opcode, which removes the topmost item from the evaluation stack.</summary>
@@ -1302,21 +1331,21 @@ public class CodeGenerator
   
   public void EmitReturn(ASTNode node)
   {
-    EmitTypedNode(node, ((MethodInfo)Method).ReturnType);
+    EmitTypedNode(node, ((IMethodInfo)Method).ReturnType);
     ILG.Emit(OpCodes.Ret);
   }
 
   /// <summary>Emits code to convert a value from one type to another. If not enough information is available to
   /// perform the conversion safely at compile time, code to perform a runtime conversion will be emitted.
   /// </summary>
-  public void EmitRuntimeConversion(Type typeOnStack, Type destinationType)
+  public void EmitRuntimeConversion(ITypeInfo typeOnStack, ITypeInfo destinationType)
   {
     if(!TryEmitSafeConversion(typeOnStack, destinationType, false))
     {
-      EmitSafeConversion(typeOnStack, typeof(object));
+      EmitSafeConversion(typeOnStack, TypeWrapper.Object);
 
       // check for some built-in types and emit smaller code for them
-      if(destinationType == typeof(ICallable))
+      if(destinationType.DotNetType == typeof(ICallable))
       {
         EmitCall(typeof(Ops), "ConvertToCallable");
       }
@@ -1324,13 +1353,13 @@ public class CodeGenerator
       {
         // if the destination type is a pointer, get the type that it points to and convert to that. we'll get the
         // pointer later via unboxing
-        Type rootType = destinationType;
+        Type rootType = destinationType.DotNetType;
         if(rootType.IsPointer || rootType.IsByRef)
         {
           rootType = rootType.GetElementType();
           if(!rootType.IsValueType || rootType.IsPointer || rootType.IsByRef)
           {
-            throw new ArgumentException(typeOnStack.FullName + " could not be converted to "+destinationType.FullName);
+            throw new ArgumentException(typeOnStack.FullName+" could not be converted to "+destinationType.FullName);
           }
         }
 
@@ -1344,27 +1373,27 @@ public class CodeGenerator
 
           // if we want the actual value, we'll load it indirectly from the pointer. otherwise, if we want the
           // pointer, we'll simply leave it on the stack.
-          if(!destinationType.IsPointer && !destinationType.IsByRef)
+          if(!destinationType.DotNetType.IsPointer && !destinationType.DotNetType.IsByRef)
           {
             EmitIndirectLoad(rootType);
           }
         }
-        else if(destinationType != typeof(object)) // otherwise, it's a reference type. perform a downcast if necessary
+        else if(destinationType.DotNetType != typeof(object)) // otherwise, it's a reference type. perform a downcast if necessary
         {
-          ILG.Emit(OpCodes.Castclass, destinationType);
+          ILG.Emit(OpCodes.Castclass, destinationType.DotNetType);
         }
       }
     }
   }
 
   /// <summary>Emits code to convert a value from one type to another.</summary>
-  public void EmitSafeConversion(Type typeOnStack, Type destType)
+  public void EmitSafeConversion(ITypeInfo typeOnStack, ITypeInfo destType)
   {
     EmitSafeConversion(typeOnStack, destType, false);
   }
 
   /// <summary>Emits code to convert a value from one type to another.</summary>
-  public void EmitSafeConversion(Type typeOnStack, Type destType, bool checkOverflow)
+  public void EmitSafeConversion(ITypeInfo typeOnStack, ITypeInfo destType, bool checkOverflow)
   {
     if(!TryEmitSafeConversion(typeOnStack, destType, checkOverflow))
     {
@@ -1397,6 +1426,12 @@ public class CodeGenerator
   }
 
   /// <summary>Emits a reference to the given type.</summary>
+  public void EmitType(ITypeInfo type)
+  {
+    EmitType(type.DotNetType);
+  }
+
+  /// <summary>Emits a reference to the given type.</summary>
   public void EmitType(Type type)
   {
     if(type.IsByRef)
@@ -1416,26 +1451,26 @@ public class CodeGenerator
     }
   }
 
-  public void EmitTypedNode(ASTNode node, Type desiredType)
+  public void EmitTypedNode(ASTNode node, ITypeInfo desiredType)
   {
-    Type type = desiredType;
+    ITypeInfo type = desiredType;
     node.Emit(this, ref type);
     EmitRuntimeConversion(type, desiredType);
   }
   
-  public void EmitTypedOperator(Operator op, Type desiredType, params ASTNode[] nodes)
+  public void EmitTypedOperator(Operator op, ITypeInfo desiredType, params ASTNode[] nodes)
   {
     EmitTypedOperator(op, desiredType, (IList<ASTNode>)nodes);
   }
 
-  public void EmitTypedOperator(Operator op, Type desiredType, IList<ASTNode> nodes)
+  public void EmitTypedOperator(Operator op, ITypeInfo desiredType, IList<ASTNode> nodes)
   {
-    Type type = desiredType;
+    ITypeInfo type = desiredType;
     op.Emit(this, nodes, ref type);
     EmitRuntimeConversion(type, desiredType);
   }
 
-  public void EmitTypedSlot(Slot slot, Type desiredType)
+  public void EmitTypedSlot(Slot slot, ITypeInfo desiredType)
   {
     slot.EmitGet(this);
     EmitRuntimeConversion(slot.Type, desiredType);
@@ -1445,7 +1480,7 @@ public class CodeGenerator
   /// as <see cref="EmitSafeConversion"/>, but will additionally perform downcasts and unboxing, neither of which are
   /// guaranteed to succeed.
   /// </summary>
-  public void EmitUnsafeConversion(Type typeOnStack, Type destType)
+  public void EmitUnsafeConversion(ITypeInfo typeOnStack, ITypeInfo destType)
   {
     EmitUnsafeConversion(typeOnStack, destType, false);
   }
@@ -1454,7 +1489,7 @@ public class CodeGenerator
   /// as <see cref="EmitSafeConversion"/>, but will additionally perform downcasts and unboxing, neither of which are
   /// guaranteed to succeed.
   /// </summary>
-  public void EmitUnsafeConversion(Type typeOnStack, Type destType, bool checkOverflow)
+  public void EmitUnsafeConversion(ITypeInfo typeOnStack, ITypeInfo destType, bool checkOverflow)
   {
     if(!TryEmitUnsafeConversion(typeOnStack, destType, checkOverflow))
     {
@@ -1465,9 +1500,9 @@ public class CodeGenerator
   /// <summary>Emits a node in a void context, meaning that the evaluation stack will be unchanged.</summary>
   public void EmitVoid(ASTNode node)
   {
-    Type type = typeof(void);
+    ITypeInfo type = TypeWrapper.Void;
     node.Emit(this, ref type);
-    if(type != typeof(void))
+    if(type != TypeWrapper.Void)
     {
       throw new CompileTimeException("Node emitted in a void context must not visibly alter the stack.");
     }
@@ -1563,7 +1598,51 @@ public class CodeGenerator
     CG.SetCustomAttribute(Method.Method, attributeBuilder);
   }
 
-  public bool TryEmitSafeConversion(Type typeOnStack, Type destType, bool checkOverflow)
+  public TypeGenerator SetupClosure(ClosureSlot[] closures, bool referencesParentClosure)
+  {
+    if(closures == null || closures.Length == 0) throw new ArgumentException("No closures were given.");
+    
+    TypeGenerator closureType = TypeGen.DefineNestedType(TypeAttributes.NestedPrivate|TypeAttributes.Sealed,
+                                                         "closure$"+closureIndex.Next);
+
+    // if the closure references its parent closure, create a constructor that takes the 'this' pointer (the parent
+    // closure) and stores it
+    if(referencesParentClosure)
+    {
+      FieldSlot parent = closureType.DefineField("$parent", TypeGen);
+      CodeGenerator cons = closureType.DefineConstructor(TypeGen);
+      cons.EmitThis(); // call the base constructor
+      cons.EmitCall(cons.TypeGen.BaseType.GetConstructor(BindingFlags.Public|BindingFlags.Instance,
+                                                         TypeWrapper.EmptyTypes));
+      cons.EmitThis(); // set the parent field
+      parent.EmitSet(cons);
+      cons.EmitReturn(); // return
+      cons.Finish();
+
+      EmitThis();
+      EmitNew((IConstructorInfo)cons.Method);
+    }
+    else
+    {
+      CodeGenerator cons = closureType.DefineDefaultConstructor();
+      cons.EmitReturn();
+      cons.Finish();
+      EmitNew((IConstructorInfo)cons.Method);
+    }
+
+    closureSlot = AllocLocalTemp(closureType, true);
+    closureSlot.EmitSet(this);
+
+    foreach(ClosureSlot slot in closures)
+    {
+      closureType.DefineField(slot.Name, slot.Type);
+      slot.EmitInitialization(this);
+    }
+    
+    return closureType;
+  }
+
+  public bool TryEmitSafeConversion(ITypeInfo typeOnStack, ITypeInfo destType, bool checkOverflow)
   {
     // the destination type cannot be null, although the source type can.
     if(destType == null) throw new ArgumentNullException();
@@ -1582,63 +1661,69 @@ public class CodeGenerator
     if(!destType.IsValueType && destType.IsAssignableFrom(typeOnStack))
     {
       // then box the type on the stack if necessary, and return true
-      if(typeOnStack.IsValueType) ILG.Emit(OpCodes.Box, typeOnStack);
+      if(typeOnStack.IsValueType) ILG.Emit(OpCodes.Box, typeOnStack.DotNetType);
       return true;
     }
 
     // if both types are primitives, we can use the built-in conversion opcodes
-    if(typeOnStack.IsPrimitive && destType.IsPrimitive)
+    if(typeOnStack.DotNetType.IsPrimitive && destType.DotNetType.IsPrimitive)
     {
-      switch(Type.GetTypeCode(destType))
+      switch(destType.TypeCode)
       {
         case TypeCode.Boolean:
           // if we're converting to bool, we'll simply convert non-I4 types to I4, preserving signed-ness
-          if(typeOnStack == typeof(double) || typeOnStack == typeof(float) || typeOnStack == typeof(long))
+          if(typeOnStack == TypeWrapper.Double || typeOnStack == TypeWrapper.Single || typeOnStack == TypeWrapper.Long)
           {
             ILG.Emit(OpCodes.Conv_I4);
           }
-          else if(typeOnStack == typeof(ulong))
+          else if(typeOnStack == TypeWrapper.ULong)
           {
             ILG.Emit(OpCodes.Conv_U4);
           }
           break;
         case TypeCode.SByte:
-          ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_I1 : OpCodes.Conv_Ovf_I1_Un : OpCodes.Conv_I1);
+          ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_I1 : OpCodes.Conv_Ovf_I1_Un
+                                 : OpCodes.Conv_I1);
           break;
         case TypeCode.Byte:
-          ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_U1 : OpCodes.Conv_Ovf_U1_Un : OpCodes.Conv_U1);
+          ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_U1 : OpCodes.Conv_Ovf_U1_Un
+                                 : OpCodes.Conv_U1);
           break;
         case TypeCode.Int16:
           if(CG.SizeOfPrimitiveNumeric(typeOnStack) >= 2)
           {
-            ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_I2 : OpCodes.Conv_Ovf_I2_Un : OpCodes.Conv_I2);
+            ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_I2 : OpCodes.Conv_Ovf_I2_Un
+                                   : OpCodes.Conv_I2);
           }
           break;
         case TypeCode.UInt16: case TypeCode.Char: // chars are also 16-bit integers
           if(CG.SizeOfPrimitiveNumeric(typeOnStack) >= 2)
           {
-            ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_U2 : OpCodes.Conv_Ovf_U2_Un : OpCodes.Conv_U2);
+            ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_U2 : OpCodes.Conv_Ovf_U2_Un
+                                   : OpCodes.Conv_U2);
           }
           break;
         case TypeCode.Int32:
           if(CG.SizeOfPrimitiveNumeric(typeOnStack) >= 4)
           {
-            ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_I4 : OpCodes.Conv_Ovf_I4_Un : OpCodes.Conv_I4);
+            ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_I4 : OpCodes.Conv_Ovf_I4_Un
+                                   : OpCodes.Conv_I4);
           }
           break;
         case TypeCode.UInt32:
           if(CG.SizeOfPrimitiveNumeric(typeOnStack) >= 4)
           {
-            ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_U4 : OpCodes.Conv_Ovf_U4_Un : OpCodes.Conv_U4);
+            ILG.Emit(checkOverflow ? CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_U4 : OpCodes.Conv_Ovf_U4_Un
+                                   : OpCodes.Conv_U4);
           }
           break;
         case TypeCode.Int64:
           if(checkOverflow)
           {
-            ILG.Emit(typeOnStack == typeof(ulong) ? OpCodes.Conv_Ovf_I8_Un :
-                     typeOnStack == typeof(float) || typeOnStack == typeof(double) ? OpCodes.Conv_Ovf_I8 : OpCodes.Conv_I8);
+            ILG.Emit(typeOnStack == TypeWrapper.ULong ? OpCodes.Conv_Ovf_I8_Un :
+                     typeOnStack == TypeWrapper.Double || typeOnStack == TypeWrapper.Single ? OpCodes.Conv_Ovf_I8 : OpCodes.Conv_I8);
           }
-          else if(typeOnStack != typeof(ulong))
+          else if(typeOnStack != TypeWrapper.ULong)
           {
             ILG.Emit(OpCodes.Conv_I8);
           }
@@ -1682,14 +1767,14 @@ public class CodeGenerator
     {
       // both Decimal and Integer have constructors that take float, double, int, uint, long, and ulong, except
       // that Integer is lacking float
-      if(typeOnStack == typeof(float) && destType == typeof(Integer)) // convert float to double for Integer
+      if(typeOnStack == TypeWrapper.Single && destType == TypeWrapper.Integer) // convert float to double for Integer
       {
         ILG.Emit(OpCodes.Conv_R8);
-        typeOnStack = typeof(double);
+        typeOnStack = TypeWrapper.Double;
       }
-      else if(CG.SizeOfPrimitiveNumeric(typeOnStack) < 4) // make small integer values out to be int or uint
+      else if(CG.SizeOfPrimitiveNumeric(typeOnStack) < 4) // make small integer values into int or uint
       {
-        typeOnStack = CG.IsSigned(typeOnStack) ? typeof(int) : typeof(uint);
+        typeOnStack = CG.IsSigned(typeOnStack) ? TypeWrapper.Int : TypeWrapper.UInt;
       }
       EmitNew(destType, typeOnStack);
       return true;
@@ -1697,11 +1782,10 @@ public class CodeGenerator
 
     // check if the source type supports implicit conversion to the destination type, or to a primitive type that can
     // be implicitly converted to the destination type
-    MethodInfo mi = typeOnStack.GetMethod("op_Implicit", BindingFlags.Public|BindingFlags.Static, null,
-                                          new Type[] { typeOnStack }, null);
+    IMethodInfo mi = typeOnStack.GetMethod("op_Implicit", BindingFlags.Public|BindingFlags.Static, typeOnStack);
     if(mi != null &&
-       (mi.ReturnType == destType ||
-        destType.IsPrimitive && mi.ReturnType.IsPrimitive && CG.HasImplicitConversion(mi.ReturnType, destType)))
+       (mi.ReturnType == destType || destType.DotNetType.IsPrimitive && mi.ReturnType.DotNetType.IsPrimitive &&
+                                     CG.HasImplicitConversion(mi.ReturnType, destType)))
     {
       EmitCall(mi);
       if(mi.ReturnType != destType)
@@ -1713,20 +1797,20 @@ public class CodeGenerator
 
     return false; // give up
   }
-  
-  public bool TryEmitUnsafeConversion(Type typeOnStack, Type destinationType, bool checkOverflow)
+
+  public bool TryEmitUnsafeConversion(ITypeInfo typeOnStack, ITypeInfo destinationType, bool checkOverflow)
   {
     if(!TryEmitSafeConversion(typeOnStack, destinationType, checkOverflow))
     {
       // these conversions are not guaranteed to work
-      if(destinationType.IsValueType && typeOnStack == typeof(object)) // unbox value types
+      if(typeOnStack == TypeWrapper.Object && destinationType.IsValueType) // unbox value types
       {
-        ILG.Emit(OpCodes.Unbox, destinationType);
-        EmitIndirectLoad(destinationType);
+        ILG.Emit(OpCodes.Unbox, destinationType.DotNetType);
+        EmitIndirectLoad(destinationType.DotNetType);
       }
       else if(!destinationType.IsValueType && destinationType.IsSubclassOf(typeOnStack)) // downcast reference types
       {
-        ILG.Emit(OpCodes.Castclass, destinationType);
+        ILG.Emit(OpCodes.Castclass, destinationType.DotNetType);
       }
       else
       {
@@ -1811,24 +1895,17 @@ public class CodeGenerator
       // if it gets here, the value was not found in the cache. add it
       TypeGenerator privateClass = CodeGen.Assembly.GetPrivateClass();
       Slot slot;
-      if(CodeGen.IsDynamicMethod) // in dynamic methods, constants are stored in an array in DynamicMethodClosure
-      {
-        if(value is Binding) // there's one array for bindings
-        {
-          slot = new ArraySlot(bindingsArraySlot, dmBindingCount++);
-        }
-        else // and another for other constants
-        {
-          slot = new ArraySlot(constantsArraySlot, dmConstantCount++, value.GetType());
-        }
-      }
-      else // in regular methods, constants are emitted as fields
+      if(!CodeGen.IsDynamicMethod) // in regular methods, constants are emitted as fields
       {
         slot = privateClass.DefineStaticField(FieldAttributes.Public|FieldAttributes.InitOnly,
-                                              "const$" + dmConstantCount++, value.GetType());
+                                              "const$" + slots.Count, CG.GetTypeInfo(value));
         CodeGenerator initializer = privateClass.GetInitializer();
         EmitConstantValue(value, initializer);
         slot.EmitSet(initializer);
+      }
+      else
+      {
+        throw new NotImplementedException();
       }
 
       // add the index to the type lookup table
@@ -1906,7 +1983,6 @@ public class CodeGenerator
     readonly List<Slot> slots = new List<Slot>();
     readonly Dictionary<Type,List<int>> indexLookup = new Dictionary<Type,List<int>>();
     readonly CodeGenerator CodeGen;
-    int dmConstantCount, dmBindingCount;
 
     static void EmitConstantValue(object value, CodeGenerator cg)
     {
@@ -1922,17 +1998,10 @@ public class CodeGenerator
         cg.EmitConstant(value);
       }
     }
-
-    static readonly Slot  bindingsArraySlot =
-      new FieldSlot(new ThisSlot(typeof(DynamicMethodClosure)),
-                    typeof(DynamicMethodClosure).GetField("Bindings", CodeGenerator.SearchAll));
-    static readonly Slot constantsArraySlot =
-      new FieldSlot(new ThisSlot(typeof(DynamicMethodClosure)),
-                    typeof(DynamicMethodClosure).GetField("Constants", CodeGenerator.SearchAll));
   }
   #endregion
   
-  Slot AllocateTemporaryField(Type type)
+  Slot AllocateTemporaryField(ITypeInfo type)
   {
     return TypeGen.DefineField("tmp$"+localNameIndex++, type);
   }
@@ -1946,12 +2015,14 @@ public class CodeGenerator
   List<Slot> localTemps, nsTemps;
   /// <summary>A stack of the current lexical scopes.</summary>
   Stack<Dictionary<string,Slot>> scopes;
+  /// <summary>The slot referencing the closure where variables referenced by nested functions will be stored.</summary>
+  Slot closureSlot;
   /// <summary>The current index for naming temporary variables.</summary>
   int localNameIndex;
   /// <summary>Whether or not the current method is a generator method.</summary>
   bool isGenerator;
 
-  static readonly Index dataIndex = new Index();
+  static readonly Index dataIndex = new Index(), closureIndex = new Index();
 }
 #endregion
 

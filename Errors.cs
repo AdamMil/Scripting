@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Reflection;
 using System.Text;
 using Scripting.AST;
+using Scripting.Emit;
 
 namespace Scripting
 {
@@ -38,16 +39,16 @@ public class CompileTimeException : ApplicationException
 /// <summary>Thrown when a method call is ambiguous between a multiple overrides.</summary>
 public class AmbiguousCallException : CompileTimeException
 {
-  public AmbiguousCallException(params MethodInfo[] methods) : base(ConstructMessage(methods)) { }
+  public AmbiguousCallException(params IMethodInfo[] methods) : base(ConstructMessage(methods)) { }
   
-  static string ConstructMessage(MethodInfo[] methods)
+  static string ConstructMessage(IMethodInfo[] methods)
   {
     StringBuilder sb = new StringBuilder("Call is ambiguous between the following methods:\n");
-    foreach(MethodInfo mi in methods)
+    foreach(IMethodInfo mi in methods)
     {
       sb.Append("  ").Append(mi.DeclaringType.FullName).Append('.').Append(mi.Name).Append('(');
       bool firstParam = true;
-      foreach(ParameterInfo pi in mi.GetParameters())
+      foreach(IParameterInfo pi in mi.GetParameters())
       {
         if(firstParam) firstParam = false;
         else sb.Append(", ");

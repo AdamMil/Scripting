@@ -32,14 +32,14 @@ public static class DotNetInterop
     #region Constructor
     if(!signature.IsConstructor) // normal methods take an IntPtr and a boolean and simply pass it to the base class.
     {
-      cg = tg.DefineChainedConstructor(typeof(IntPtr), typeof(bool));
+      cg = tg.DefineChainedConstructor(TypeWrapper.IntPtr, TypeWrapper.Bool);
     }
     else // constructors have a default constructor that passes 'false' to the base class
     {
       cg = tg.DefineDefaultConstructor();
       cg.EmitThis();
       cg.EmitBool(false);
-      cg.EmitCall(tg.BaseType.GetConstructor(BindingFlags.Instance|BindingFlags.NonPublic, typeof(bool)));
+      cg.EmitCall(tg.BaseType.GetConstructor(BindingFlags.Instance|BindingFlags.NonPublic, TypeWrapper.Bool));
     }
     // whichever constructor was used, finish it
     cg.EmitReturn();
@@ -62,9 +62,9 @@ public static class DotNetInterop
     #region CheckArity
     if(minArgs != 0 || maxArgs != -1) // if the argument counts aren't unlimited, emit a function to check the arity
     {
-      cg = tg.DefineStaticMethod(MethodAttributes.Private, "CheckArity", typeof(void), typeof(object[]));
+      cg = tg.DefineStaticMethod(MethodAttributes.Private, "CheckArity", TypeWrapper.Void, TypeWrapper.ObjectArray);
       
-      Slot intSlot = cg.AllocLocalTemp(typeof(int));
+      Slot intSlot = cg.AllocLocalTemp(TypeWrapper.Int);
 
       if(minArgs != 0) // check minimum
       {
@@ -126,7 +126,7 @@ public static class DotNetInterop
     #endregion
     
     #region Call(object[])
-    cg = tg.DefineMethodOverride("Call", typeof(object[]));
+    cg = tg.DefineMethodOverride("Call", TypeWrapper.ObjectArray);
     
     if(checkArity != null) // check the arity if any
     {
@@ -140,12 +140,12 @@ public static class DotNetInterop
       cg.EmitInt(i);
       cg.ILG.Emit(OpCodes.Ldelem_Ref);
 
-      if(signature.ParamTypes[i].IsByRef || signature.ParamTypes[i].IsPointer)
+      if(signature.ParamTypes[i].DotNetType.IsByRef || signature.ParamTypes[i].DotNetType.IsPointer)
       {
         throw new NotImplementedException();
       }
       
-      cg.EmitRuntimeConversion(typeof(object), signature.ParamTypes[i]);
+      cg.EmitRuntimeConversion(TypeWrapper.Object, signature.ParamTypes[i]);
     }
     
     if(minArgs < numNormalArgs) // if there are any optional arguments
@@ -173,10 +173,11 @@ public static class DotNetInterop
         cg.ILG.Emit(OpCodes.Tailcall);
       }
 
-      cg.ILG.EmitCalli(OpCodes.Calli, signature.Convention, signature.ReturnType, signature.ParamTypes, null);
+      cg.ILG.EmitCalli(OpCodes.Calli, signature.Convention, signature.ReturnType.DotNetType,
+                       ReflectionWrapperHelper.Unwrap(signature.ParamTypes), null);
     }
 
-    cg.EmitSafeConversion(signature.ReturnType, typeof(object));
+    cg.EmitSafeConversion(signature.ReturnType, TypeWrapper.Object);
 
     cg.EmitReturn();
     cg.Finish();
@@ -207,24 +208,24 @@ sealed class Signature
     RequireThisPtr = !IsConstructor && !methodBase.IsStatic && !dontRequireThisPtr;
     Convention     = methodBase.CallingConvention == CallingConventions.VarArgs ?
                        CallingConventions.VarArgs : CallingConventions.Standard;
-    ReturnType     = IsConstructor ? methodBase.DeclaringType : ((MethodInfo)methodBase).ReturnType;
-    ParamTypes     = new Type[parameters.Length + (RequireThisPtr ? 1 : 0)];
+    ReturnType     = IsConstructor ? method.DeclaringType : ((IMethodInfo)method).ReturnType;
+    ParamTypes     = new ITypeInfo[parameters.Length + (RequireThisPtr ? 1 : 0)];
     HasParamArray  = parameters.Length != 0 && parameters[parameters.Length-1].IsParamArray;
     
     if(RequireThisPtr)
     {
-      Type thisPtrType = method.DeclaringType.DotNetType;
+      ITypeInfo thisPtrType = method.DeclaringType;
       // methods need 'this' /pointers/, so we make sure it's a pointer type (eg, int becomes int*)
       if(thisPtrType.IsValueType)
       {
-        thisPtrType = thisPtrType.MakePointerType();
+        thisPtrType = TypeWrapper.Get(thisPtrType.DotNetType.MakePointerType());
       }
       ParamTypes[0] = thisPtrType;
     }
-    
+
     for(int i=0; i<parameters.Length; i++)
     {
-      ParamTypes[i + (RequireThisPtr ? 1 : 0)] = parameters[i].ParameterType.DotNetType;
+      ParamTypes[i + (RequireThisPtr ? 1 : 0)] = parameters[i].ParameterType;
     }
   }
 
@@ -259,8 +260,8 @@ sealed class Signature
  	  return hash;
   }
 
-  public readonly Type[] ParamTypes;
-  public readonly Type ReturnType;
+  public readonly ITypeInfo[] ParamTypes;
+  public readonly ITypeInfo ReturnType;
   public readonly CallingConventions Convention;
   public readonly bool IsConstructor, RequireThisPtr, HasParamArray;
 }
@@ -285,11 +286,6 @@ public abstract class MethodWrapper : ICallableWithKeywords
   public abstract int MinArgs { get; }
   public abstract int MaxArgs { get; }
 
-  public bool NeedsFreshArgs
-  {
-    get { return false; }
-  }
-  
   public abstract object Call(object[] args);
 
   public object Call(object[] positionalArgs, string[] keywords, object[] keywordValues)

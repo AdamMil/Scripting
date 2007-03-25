@@ -8,8 +8,8 @@ namespace NetLisp.Runtime
 public sealed class LispFunctionTemplate : Scripting.Runtime.FunctionTemplate
 {
   public LispFunctionTemplate(IntPtr funcPtr, string name, string[] parameterNames, Type[] parameterTypes,
-                              int numRequired, bool hasListParam, bool hasDictParam, bool hasArgClosure)
-    : base(funcPtr, name, parameterNames, parameterTypes, numRequired, hasListParam, hasDictParam, hasArgClosure) { }
+                              int numRequired, bool hasListParam, bool hasDictParam)
+    : base(funcPtr, name, parameterNames, parameterTypes, numRequired, hasListParam, hasDictParam) { }
 
   protected override object PackArguments(object[] arguments, int index, int length)
   {

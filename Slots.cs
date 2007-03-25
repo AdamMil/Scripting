@@ -19,7 +19,7 @@ public abstract class Slot
   public abstract bool CanWrite { get; }
 
   /// <summary>Gets the type of the variable stored in this slot.</summary>
-  public abstract Type Type { get; }
+  public abstract ITypeInfo Type { get; }
 
   /// <summary>Emits code to retrieve the slot value and push it onto the stack. The value must be an instance of
   /// type <see cref="Type"/>.
@@ -44,7 +44,7 @@ public abstract class Slot
   /// stack.
   /// </summary>
   /// <exception cref="NotSupportedException">Thrown if the slot is read-only or does not support code generation.</exception>
-  public abstract void EmitSet(CodeGenerator cg, Type typeOnStack);
+  public abstract void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack);
 
   /// <summary>Emits code to set the value of the slot given another slot that contains the new value.</summary>
   /// <remarks>The default implementation retrieves the value from the slot and calls
@@ -62,7 +62,7 @@ public abstract class Slot
   /// <exception cref="NotSupportedException">Thrown if the slot is read-only or does not support code generation.</exception>
   public virtual void EmitSet(CodeGenerator cg, ASTNode valueNode)
   {
-    Type desiredType = Type;
+    ITypeInfo desiredType = Type;
     valueNode.Emit(cg, ref desiredType);
     EmitSet(cg, desiredType);
   }
@@ -82,7 +82,7 @@ public abstract class Slot
   /// <exception cref="NotSupportedException">Thrown if this slot does not support interpreted execution.</exception>
   public void EvaluateSet(object newValue)
   {
-    EvaluateTypedSet(Ops.ConvertTo(newValue, Type));
+    EvaluateTypedSet(Ops.ConvertTo(newValue, Type.DotNetType));
   }
 
   /// <summary>In interpreted execution, evaluates the slot to set the value given an instance of type
@@ -104,13 +104,13 @@ public sealed class ArraySlot : Slot
 {
   public ArraySlot(Slot array, int index) : this(array,  index, null) { }
 
-  public ArraySlot(Slot array, int index, Type desiredType)
+  public ArraySlot(Slot array, int index, ITypeInfo desiredType)
   {
     if(array == null) throw new ArgumentNullException();
-    if(!array.Type.IsArray) throw new ArgumentException("Slot does not reference an array.");
+    if(!array.Type.DotNetType.IsArray) throw new ArgumentException("Slot does not reference an array.");
 
     this.Array       = array;
-    this.elementType = array.Type.GetElementType();
+    this.elementType = array.Type.ElementType;
     this.desiredType = desiredType == null ? elementType : desiredType;
   }
 
@@ -129,7 +129,7 @@ public sealed class ArraySlot : Slot
     get { return true; }
   }
 
-  public override Type Type
+  public override ITypeInfo Type
   {
     get { return desiredType; }
   }
@@ -138,8 +138,8 @@ public sealed class ArraySlot : Slot
   {
     Array.EmitGet(cg);
     cg.EmitInt(Index);
-    cg.EmitArrayLoad(elementType);
-    if(elementType != desiredType) cg.EmitUnsafeConversion(elementType, desiredType);
+    cg.EmitArrayLoad(elementType.DotNetType);
+    cg.EmitUnsafeConversion(elementType, desiredType);
   }
 
   public override void EmitGetAddr(CodeGenerator cg)
@@ -147,7 +147,7 @@ public sealed class ArraySlot : Slot
     if(elementType != desiredType) throw new NotSupportedException();
     Array.EmitGet(cg);
     cg.EmitInt(Index);
-    cg.ILG.Emit(OpCodes.Ldelema, elementType);
+    cg.ILG.Emit(OpCodes.Ldelema, elementType.DotNetType);
   }
 
   public override void EmitSet(CodeGenerator cg, ASTNode valueNode)
@@ -155,7 +155,7 @@ public sealed class ArraySlot : Slot
     Array.EmitGet(cg);
     cg.EmitInt(Index);
     cg.EmitTypedNode(valueNode, elementType);
-    cg.EmitArrayStore(elementType);
+    cg.EmitArrayStore(elementType.DotNetType);
   }
 
   public override void EmitSet(CodeGenerator cg, Slot valueSlot)
@@ -163,10 +163,10 @@ public sealed class ArraySlot : Slot
     Array.EmitGet(cg);
     cg.EmitInt(Index);
     cg.EmitTypedSlot(valueSlot, elementType);
-    cg.EmitArrayStore(elementType);
+    cg.EmitArrayStore(elementType.DotNetType);
   }
 
-  public override void EmitSet(CodeGenerator cg, Type typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
     Slot temp = cg.AllocLocalTemp(elementType);
     temp.EmitSet(cg, typeOnStack);
@@ -188,7 +188,145 @@ public sealed class ArraySlot : Slot
 
   public readonly Slot Array;
   public readonly int Index;
-  readonly Type elementType, desiredType;
+  readonly ITypeInfo elementType, desiredType;
+}
+#endregion
+
+#region ClosureSlot
+public sealed class ClosureSlot : Slot
+{
+  /// <summary>Initializes the closure slot with a name, type, and initial value.</summary>
+  /// <param name="name">
+  /// The name of the slot. This name must be unique and must match a field name within the closure type.
+  /// </param>
+  /// <param name="initialValue">A slot used to initialize the closure slot. If not null, the closure slot will be set
+  /// to this slot's value when it is first created.
+  /// </param>
+  /// <remarks>The closure slot is given a depth of zero. This is the constructor to be used within the method where
+  /// the closure values are defined.
+  /// </remarks>
+  public ClosureSlot(string name, ITypeInfo type, Slot initialValue) : this(name, type, 0)
+  {
+    this.initialValueSlot = initialValue;
+  }
+
+  /// <param name="depth">This parameter determines how many parent closures we'll need to traverse before finding the
+  /// closure that contains the value. A depth of zero is used in the function where the closure values are defined and
+  /// bound. Closure slots within nested functions that use the closure value should have a depth of one, unless they
+  /// create their own closures, which causes the depth to increase further by one. Each closure definition between the
+  /// place where the variable is defined and where it's used increases its depth by one.
+  /// </param>
+  ClosureSlot(string name, ITypeInfo type, int depth)
+  {
+    if(type == null) throw new ArgumentNullException();
+    if(depth < 0) throw new ArgumentOutOfRangeException("depth");
+    this.Name  = name;
+    this.type  = type;
+    this.Depth = depth;
+  }
+
+  public override bool CanGetAddr
+  {
+    get { return true; }
+  }
+
+  public override bool CanRead
+  {
+    get { return true; }
+  }
+
+  public override bool CanWrite
+  {
+    get { return true; }
+  }
+
+  public readonly int Depth;
+
+  public string Name
+  {
+    get { return name; }
+    set
+    {
+      if(string.IsNullOrEmpty(value)) throw new ArgumentException("Name cannot be empty.");
+      name = value;
+    }
+  }
+
+  public override ITypeInfo Type
+  {
+    get { return type; }
+  }
+
+  public ClosureSlot CloneWithDepth(int depth)
+  {
+    return new ClosureSlot(name, type, depth);
+  }
+
+  public override void EmitGet(CodeGenerator cg)
+  {
+    GetFieldSlot(cg).EmitGet(cg);
+  }
+
+  public override void EmitGetAddr(CodeGenerator cg)
+  {
+    GetFieldSlot(cg).EmitGetAddr(cg);
+  }
+
+  public override void EmitSet(CodeGenerator cg, ASTNode valueNode)
+  {
+    GetFieldSlot(cg).EmitSet(cg, valueNode);
+  }
+
+  public override void EmitSet(CodeGenerator cg, Slot valueSlot)
+  {
+    GetFieldSlot(cg).EmitSet(cg, valueSlot);
+  }
+
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
+  {
+    GetFieldSlot(cg).EmitSet(cg, typeOnStack);
+  }
+
+  public void EmitInitialization(CodeGenerator cg)
+  {
+    if(initialValueSlot != null)
+    {
+      GetFieldSlot(cg).EmitSet(cg, initialValueSlot);
+    }
+  }
+
+  Slot GetFieldSlot(CodeGenerator cg)
+  {
+    if(fieldSlot == null)
+    {
+      ITypeInfo closureType;
+      Slot closureSlot;
+      if(Depth == 0)
+      {
+        closureSlot = cg.ClosureSlot;
+        closureType = closureSlot.Type;
+      }
+      else
+      {
+        closureType = cg.TypeGen;
+        closureSlot = new ThisSlot(type);
+        for(int i=1; i<Depth; i++)
+        {
+          closureSlot = new FieldSlot(closureSlot, type.GetField("$parent"+Depth));
+          closureType = closureType.BaseType;
+        }
+      }
+
+      fieldSlot = new FieldSlot(closureSlot, closureType.GetField(name));
+    }
+
+    return fieldSlot;
+  }
+
+  readonly ITypeInfo type;
+  readonly Slot initialValueSlot;
+  string name;
+  Slot fieldSlot;
 }
 #endregion
 
@@ -211,7 +349,7 @@ public abstract class InterpretedSlot : Slot
     throw new NotSupportedException("This slot does not support code generation.");
   }
 
-  public override void EmitSet(CodeGenerator cg, Type typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
     throw new NotSupportedException("This slot does not support code generation.");
   }
@@ -224,7 +362,7 @@ public sealed class InterpretedLocalSlot : InterpretedSlot
 {
   /// <param name="name">The name of the variable. This must be a non-empty string.</param>
   /// <param name="type">The type of the variable. This must not be null.</param>
-  public InterpretedLocalSlot(string name, Type type)
+  public InterpretedLocalSlot(string name, ITypeInfo type)
   {
     if(string.IsNullOrEmpty(name)) throw new ArgumentException();
     if(type == null) throw new ArgumentNullException();
@@ -242,7 +380,7 @@ public sealed class InterpretedLocalSlot : InterpretedSlot
     get { return true; }
   }
 
-  public override Type Type
+  public override ITypeInfo Type
   {
     get { return type; }
   }
@@ -258,7 +396,7 @@ public sealed class InterpretedLocalSlot : InterpretedSlot
   }
   
   readonly string name;
-  readonly Type type;
+  readonly ITypeInfo type;
 }
 #endregion
 
@@ -267,14 +405,14 @@ public sealed class InterpretedLocalSlot : InterpretedSlot
 public sealed class FieldSlot : Slot
 {
   /// <summary>Initializes the slot with a static field.</summary>
-  public FieldSlot(FieldInfo staticField) : this(null, staticField) { }
+  public FieldSlot(IFieldInfo staticField) : this(null, staticField) { }
 
   /// <summary>Initializes the slot with a field.</summary>
-  /// <param name="field">The <see cref="FieldInfo"/> describing the field.</param>
+  /// <param name="field">The <see cref="IFieldInfo"/> describing the field.</param>
   /// <param name="instance">A <see cref="Slot"/> representing the field's object instance. For static fields, this
   /// must be null. For non-static fields, this must not be null.
   /// </param>
-  public FieldSlot(Slot instance, FieldInfo field)
+  public FieldSlot(Slot instance, IFieldInfo field)
   {
     if(field == null) throw new ArgumentNullException();
 
@@ -306,7 +444,7 @@ public sealed class FieldSlot : Slot
     get { return true; }
   }
 
-  public override Type Type
+  public override ITypeInfo Type
   {
     get { return Field.FieldType; }
   }
@@ -323,7 +461,7 @@ public sealed class FieldSlot : Slot
     cg.EmitFieldGetAddr(Field);
   }
 
-  public override void EmitSet(CodeGenerator cg, Type typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
     cg.EmitRuntimeConversion(typeOnStack, Type);
     if(Instance == null)
@@ -355,15 +493,15 @@ public sealed class FieldSlot : Slot
 
   public override object EvaluateGet()
   {
-    return Field.GetValue(Instance == null ? null : Instance.EvaluateGet());
+    return Field.Field.GetValue(Instance == null ? null : Instance.EvaluateGet());
   }
 
   protected override void EvaluateTypedSet(object newValue)
   {
-    Field.SetValue(Instance == null ? null : Instance.EvaluateGet(), newValue);
+    Field.Field.SetValue(Instance == null ? null : Instance.EvaluateGet(), newValue);
   }
 
-  public readonly FieldInfo Field;
+  public readonly IFieldInfo Field;
   public readonly Slot Instance;
 }
 #endregion
@@ -372,20 +510,22 @@ public sealed class FieldSlot : Slot
 /// <summary>Represents a .NET local variable on the stack.</summary>
 public sealed class LocalSlot : Slot
 { 
-  public LocalSlot(LocalBuilder lb)
+  public LocalSlot(LocalBuilder lb, ITypeInfo type)
   {
     if(lb == null) throw new ArgumentNullException();
-    builder = lb;
+    this.builder = lb;
+    this.type    = type;
   }
 
-  public LocalSlot(CodeGenerator cg, LocalBuilder lb, string name) : this(lb)
+  public LocalSlot(CodeGenerator cg, LocalBuilder lb, ITypeInfo type, string name) : this(lb, type)
   {
     if(cg == null || name == null) throw new ArgumentNullException();
     if(string.IsNullOrEmpty(name)) throw new ArgumentException("Name must not be empty.");
     if(!cg.IsDynamicMethod && cg.Assembly.IsDebug) lb.SetLocalSymInfo(name);
   }
 
-  public LocalSlot(CodeGenerator cg, LocalBuilder lb, string name, int scopeStart, int scopeEnd) : this(lb)
+  public LocalSlot(CodeGenerator cg, LocalBuilder lb, ITypeInfo type, string name, int scopeStart, int scopeEnd)
+    : this(lb, type)
   {
     if(cg == null || name == null) throw new ArgumentNullException();
     if(string.IsNullOrEmpty(name)) throw new ArgumentException("Name must not be empty.");
@@ -407,9 +547,9 @@ public sealed class LocalSlot : Slot
     get { return true; }
   }
 
-  public override Type Type
+  public override ITypeInfo Type
   {
-    get { return builder.LocalType; }
+    get { return type; }
   }
 
   public override void EmitGet(CodeGenerator cg)
@@ -422,13 +562,14 @@ public sealed class LocalSlot : Slot
     cg.ILG.Emit(OpCodes.Ldloca, builder);
   }
 
-  public override void EmitSet(CodeGenerator cg, Type typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
     cg.EmitRuntimeConversion(typeOnStack, Type);
     cg.ILG.Emit(OpCodes.Stloc, builder);
   }
 
   readonly LocalBuilder builder;
+  readonly ITypeInfo type;
 }
 #endregion
 
@@ -439,7 +580,7 @@ public sealed class LocalSlot : Slot
 /// </remarks>
 public sealed class LocalProxySlot : Slot
 {
-  public LocalProxySlot(string name, Type type)
+  public LocalProxySlot(string name, ITypeInfo type)
   {
     if(name == null || type == null) throw new ArgumentNullException();
     if(string.IsNullOrEmpty(name)) throw new ArgumentException("Name cannot be empty.");
@@ -462,7 +603,7 @@ public sealed class LocalProxySlot : Slot
     get { return true; }
   }
 
-  public override Type Type
+  public override ITypeInfo Type
   {
     get { return type; }
   }
@@ -487,7 +628,7 @@ public sealed class LocalProxySlot : Slot
     GetSlot(cg).EmitSet(cg, valueSlot);
   }
 
-  public override void EmitSet(CodeGenerator cg, Type typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
     GetSlot(cg).EmitSet(cg, typeOnStack);
   }
@@ -502,7 +643,7 @@ public sealed class LocalProxySlot : Slot
   }
 
   readonly string name;
-  readonly Type type;
+  readonly ITypeInfo type;
   Slot slot;
 }
 #endregion
@@ -519,20 +660,20 @@ public sealed class ParameterSlot : Slot
   /// and must match the type of the parameter used when generating the function.
   /// </param>
   /// <remarks>The parameter created will be created with <see cref="ParameterAttributes.None"/>.</remarks>
-  public ParameterSlot(MethodBuilder mb, int argIndex, string name, Type type)
+  public ParameterSlot(MethodBuilder mb, int argIndex, string name, ITypeInfo type)
     : this(mb.DefineParameter(argIndex+1, ParameterAttributes.None, name), type) { }
 
   /// <summary>References a parameter given a <see cref="ParameterBuilder"/> and its type.</summary>
   /// <param name="parameterBuilder">A <see cref="ParameterBuilder"/> referencing the new parameter.</param>
   /// <param name="type">The type of the parameter.</param>
-  public ParameterSlot(ParameterBuilder parameterBuilder, Type type)
+  public ParameterSlot(ParameterBuilder parameterBuilder, ITypeInfo type)
   {
     ArgIndex  = parameterBuilder.Position - 1;
     this.type = type;
   }
   
   /// <summary>References a parameter given its index (ignoring any implicit 'this' pointer) and its type.</summary>
-  public ParameterSlot(int index, Type type)
+  public ParameterSlot(int index, ITypeInfo type)
   {
     ArgIndex  = index;
     this.type = type;
@@ -556,9 +697,9 @@ public sealed class ParameterSlot : Slot
   /// <summary>The type of the parameter's value. If the parameter type is by reference, this returns the type referred
   /// to by the reference.
   /// </summary>
-  public override Type Type
+  public override ITypeInfo Type
   {
-    get { return IsByRef ? type.GetElementType() : type; }
+    get { return IsByRef ? type.ElementType : type; }
   }
 
   /// <summary>Gets the value referred to by the parameter. If the parameter type is by reference, this will
@@ -570,7 +711,7 @@ public sealed class ParameterSlot : Slot
 
     if(IsByRef)
     {
-      cg.EmitIndirectLoad(Type);
+      cg.EmitIndirectLoad(Type.DotNetType);
     }
   }
 
@@ -589,7 +730,7 @@ public sealed class ParameterSlot : Slot
   /// <summary>Sets the value referred to by the parameter. If the parameter type is by reference, this will
   /// modify the original object and not the pointer.
   /// </summary>
-  public override void EmitSet(CodeGenerator cg, Type typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
     if(IsByRef)
     {
@@ -599,7 +740,7 @@ public sealed class ParameterSlot : Slot
 
       cg.EmitArgGet(ArgIndex);
       temp.EmitGet(cg);
-      cg.EmitIndirectStore(Type);
+      cg.EmitIndirectStore(Type.DotNetType);
       cg.FreeLocalTemp(temp);
     }
     else
@@ -611,12 +752,12 @@ public sealed class ParameterSlot : Slot
   /// <summary>Gets whether the parameter is passed by reference.</summary>
   bool IsByRef
   {
-    get { return type.IsByRef; }
+    get { return type.DotNetType.IsByRef; }
   }
 
   /// <summary>The zero-based parameter position, excluding any implicit 'this' pointer.</summary>
   readonly int ArgIndex;
-  readonly Type type;
+  readonly ITypeInfo type;
 }
 #endregion
 
@@ -625,7 +766,7 @@ public sealed class ParameterSlot : Slot
 public sealed class ThisSlot : Slot
 {
   /// <summary>Initializes the slot with the type of the class containing the method.</summary>
-  public ThisSlot(Type classType)
+  public ThisSlot(ITypeInfo classType)
   {
     if(classType == null) throw new ArgumentNullException();
     type = classType;
@@ -646,7 +787,7 @@ public sealed class ThisSlot : Slot
     get { return true; }
   }
 
-  public override Type Type
+  public override ITypeInfo Type
   {
     get { return type; }
   }
@@ -661,21 +802,21 @@ public sealed class ThisSlot : Slot
     cg.ILG.Emit(OpCodes.Ldarga, 0);
   }
 
-  public override void EmitSet(CodeGenerator cg, Type typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
     cg.EmitRuntimeConversion(typeOnStack, Type);
     cg.ILG.Emit(OpCodes.Starg, 0);
   }
 
-  Type type;
+  readonly ITypeInfo type;
 }
 #endregion
 
 #region TopLevelSlot
 public sealed class TopLevelSlot : Slot
 {
-  public TopLevelSlot(string name) : this(name, typeof(object)) { }
-  public TopLevelSlot(string name, Type type)
+  public TopLevelSlot(string name) : this(name, TypeWrapper.Object) { }
+  public TopLevelSlot(string name, ITypeInfo type)
   {
     if(name == null || type == null) throw new ArgumentNullException();
     this.Name = name;
@@ -697,7 +838,7 @@ public sealed class TopLevelSlot : Slot
     get { return true; }
   }
 
-  public override Type Type
+  public override ITypeInfo Type
   {
     get { return type; }
   }
@@ -707,7 +848,7 @@ public sealed class TopLevelSlot : Slot
     EmitBinding(cg);
     if(cg.TypeGen.Assembly.IsDebug) cg.EmitCall(typeof(Ops), "CheckBinding");
     cg.EmitFieldGet(valueField);
-    cg.EmitUnsafeConversion(typeof(object), type);
+    cg.EmitUnsafeConversion(TypeWrapper.Object, type);
   }
 
   public override void EmitGetAddr(CodeGenerator cg)
@@ -717,11 +858,11 @@ public sealed class TopLevelSlot : Slot
     cg.EmitFieldGetAddr(valueField);
   }
 
-  public override void EmitSet(CodeGenerator cg, Type typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
     cg.EmitRuntimeConversion(typeOnStack, type);
-    cg.EmitSafeConversion(type, typeof(object));
-    Slot temp = cg.AllocLocalTemp(typeof(object));
+    cg.EmitSafeConversion(type, TypeWrapper.Object);
+    Slot temp = cg.AllocLocalTemp(TypeWrapper.Object);
     temp.EmitSet(cg);
     EmitBinding(cg);
     temp.EmitGet(cg);
@@ -733,7 +874,7 @@ public sealed class TopLevelSlot : Slot
   {
     EmitBinding(cg);
     cg.EmitTypedNode(valueNode, type);
-    cg.EmitSafeConversion(type, typeof(object));
+    cg.EmitSafeConversion(type, TypeWrapper.Object);
     cg.EmitFieldSet(valueField);
   }
 
@@ -741,7 +882,7 @@ public sealed class TopLevelSlot : Slot
   {
     EmitBinding(cg);
     cg.EmitTypedSlot(valueSlot, type);
-    cg.EmitSafeConversion(type, typeof(object));
+    cg.EmitSafeConversion(type, TypeWrapper.Object);
     cg.EmitFieldSet(valueField);
   }
 
@@ -753,7 +894,7 @@ public sealed class TopLevelSlot : Slot
     {
       if(TopLevel.Current == null)
       {
-        throw new CompileTimeException("A top-lvele environment is necessary to compile this code.");
+        throw new CompileTimeException("A top-level environment is necessary to compile this code.");
       }
       binding = cg.GetCachedConstantSlot(TopLevel.Current.GetBinding(Name));
     }
@@ -761,7 +902,7 @@ public sealed class TopLevelSlot : Slot
     binding.EmitGet(cg);
   }
 
-  readonly Type type;
+  readonly ITypeInfo type;
   Slot binding;
   
   static readonly FieldInfo valueField = typeof(Binding).GetField("Value");
