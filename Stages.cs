@@ -17,13 +17,18 @@ public abstract class ProcessorBase : IASTProcessor
 {
   public ProcessorBase(DecoratorType type)
   {
-    DecoratorType = type;
+    decoratorType = type;
   }
 
   public abstract Stage Stage { get; }
   public abstract void Process(ref ASTNode rootNode);
 
-  protected readonly DecoratorType DecoratorType;
+  /// <summary>Gets whether the processor is being run on an AST that will end up being compiled.</summary>
+  /// <remarks>If false, the AST will end up being interpreted.</remarks>
+  protected bool IsCompiled
+  {
+    get { return decoratorType == DecoratorType.Compiled; }
+  }
 
   /// <summary>Adds an output message to <see cref="CompilerState"/>.</summary>
   protected virtual void AddMessage(OutputMessage message)
@@ -54,10 +59,54 @@ public abstract class ProcessorBase : IASTProcessor
   {
     AddWarningMessage(node, string.Format(format, args));
   }
+
+  readonly DecoratorType decoratorType;
+}
+#endregion
+
+#region PrefixProcessor
+/// <summary>Provides the base class for a processor that walks the tree in a prefix order and allows nodes to be
+/// replaced or removed.
+/// </summary>
+public abstract class PrefixProcessor : ProcessorBase
+{
+  protected PrefixProcessor(DecoratorType type) : base(type) { }
+
+  public override void Process(ref ASTNode rootNode)
+  {
+    RecursiveVisit(ref rootNode);
+  }
+
+  protected abstract bool Visit(ref ASTNode node);
+  protected virtual void EndVisit(ASTNode node) { }
+
+  protected void RecursiveVisit(ref ASTNode node)
+  {
+    if(Visit(ref node))
+    {
+      for(int i=0; i<node.Children.Count; i++)
+      {
+        ASTNode child = node.Children[i];
+        RecursiveVisit(ref child);
+
+        if(child == null)
+        {
+          node.Children.RemoveAt(i--);
+        }
+        else if(child != node.Children[i])
+        {
+          node.Children[i] = child;
+        }
+      }
+    }
+
+    if(node != null) EndVisit(node); // Visit may have set the node to null (removing it)
+  }
 }
 #endregion
 
 #region PrefixVisitor
+/// <summary>Provides the base class for a simple visitor that walks the tree in a prefix order.</summary>
 public abstract class PrefixVisitor : ProcessorBase
 {
   protected PrefixVisitor(DecoratorType type) : base(type) { }

@@ -77,13 +77,8 @@ public class ASTNodeCollection : Collection<ASTNode>
   protected override void InsertItem(int index, ASTNode item)
   {
     AssertWriteable();
-    AssertNotNull(item);
+    AssertValidInsertNode(item);
     
-    if(item.ParentNode != null)
-    {
-      throw new ArgumentException("This node already belongs to a parent.");
-    }
-
     base.InsertItem(index, item);
     AfterAddingItem(index);
 
@@ -106,15 +101,16 @@ public class ASTNodeCollection : Collection<ASTNode>
 
   protected override void SetItem(int index, ASTNode item)
   {
-    AssertNotNull(item);
+    AssertValidInsertNode(item);
     BeforeRemovingItem(index);
     base.SetItem(index, item);
     AfterAddingItem(index);
   }
 
-  void AssertNotNull(ASTNode item)
+  void AssertValidInsertNode(ASTNode item)
   {
     if(item == null) throw new ArgumentNullException("Null nodes cannot be added as children.");
+    if(item.ParentNode != null) throw new ArgumentException("This node already belongs to a parent.");
   }
 
   void AssertWriteable()
@@ -263,7 +259,7 @@ public abstract class ASTNode
   /// node normally emits nothing. If the value type is null, this node normally emits null. A node may emit a type
   /// other than its value type depending on the <c>desiredType</c> parameter passed to the <see cref="Emit"/> method.
   /// </summary>
-  public abstract Type ValueType { get; }
+  public abstract ITypeInfo ValueType { get; }
 
   /// <summary>Gets or sets the name of the data source from which the node was parsed.</summary>
   public string SourceName;
@@ -304,12 +300,39 @@ public abstract class ASTNode
     return GetAttributes(attributeType).Length > 0;
   }
 
+  /// <summary>Gets the nearest ancestor of this node with the given node type.</summary>
+  /// <typeparam name="T">The type of node to retrieve.</typeparam>
+  /// <returns>The nearest ancestor with type <typeparamref name="T"/>, or null if an ancestor with that type could
+  /// not be found.
+  /// </returns>
+  public T GetAncestor<T>() where T : ASTNode
+  {
+    ASTNode ancestor = parent;
+    while(ancestor != null)
+    {
+      T ret = ancestor as T;
+      if(ret != null) return ret;
+      ancestor = ancestor.parent;
+    }
+    return null;
+  }
+
+  /// <summary>Retrieves all descendants of the current node with the given node type.</summary>
+  /// <typeparam name="T">The type of nodes to retrieve.</typeparam>
+  /// <returns>Returns an array of <typeparamref name="T"/>, with the nodes given in depth-first order.</returns>
+  public T[] GetDescendants<T>() where T : ASTNode
+  {
+    List<T> nodes = new List<T>();
+    GetDescendants(nodes);
+    return nodes.ToArray();
+  }
+
   public virtual object Evaluate()
   {
     throw new NotSupportedException();
   }
 
-  public abstract void Emit(CodeGenerator cg, ref Type desiredType);
+  public abstract void Emit(CodeGenerator cg, ref ITypeInfo desiredType);
 
   /// <summary>Marks this node and its child nodes based on the <paramref name="tail"/> parameter.</summary>
   /// <param name="tail">If true, this node's value will be returned from the function in which it's emitted.</param>
@@ -387,14 +410,19 @@ public abstract class ASTNode
   }
 
   /// <summary>Gets the <see cref="ValueType"/> of each node passed and returns the types in an array.</summary>
-  public static Type[] GetNodeTypes(IList<ASTNode> nodes)
+  public static ITypeInfo[] GetNodeTypes(IList<ASTNode> nodes)
   {
-    Type[] types = new Type[nodes.Count];
+    ITypeInfo[] types = new ITypeInfo[nodes.Count];
     for(int i=0; i<types.Length; i++)
     {
       types[i] = nodes[i].ValueType;
     }
     return types;
+  }
+
+  protected static bool IsVoid(ITypeInfo type)
+  {
+    return type == TypeWrapper.Void;
   }
 
   internal ASTNode parent, previousNode, nextNode;
@@ -411,6 +439,19 @@ public abstract class ASTNode
     Tail = 2,
     /// <summary>Indicates whether this node is contained within an exception handling block.</summary>
     InTry = 4,
+  }
+
+  void GetDescendants<T>(List<T> nodes) where T : ASTNode
+  {
+    foreach(ASTNode child in Children)
+    {
+      T tChild = child as T;
+      if(tChild != null)
+      {
+        nodes.Add(tChild);
+      }
+      child.GetDescendants(nodes);
+    }
   }
 
   bool Is(Flag flag)
@@ -440,7 +481,7 @@ public abstract class AssignableNode : ASTNode
   public AssignableNode(bool isContainerNode) : base(isContainerNode) { }
   public abstract void EvaluateSet(object newValue);
   public abstract void EmitSet(CodeGenerator cg, ASTNode valueNode);
-  public abstract void EmitSet(CodeGenerator cg, Type typeOnStack);
+  public abstract void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack);
 }
 #endregion
 
@@ -463,12 +504,12 @@ public class AssignNode : ASTNode
     get { return Children[1]; }
   }
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
     get { return RHS.ValueType; }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
     if(desiredType == typeof(void))
     {
@@ -476,7 +517,7 @@ public class AssignNode : ASTNode
     }
     else
     {
-      Type rhsType = LHS.ValueType;
+      ITypeInfo rhsType = LHS.ValueType;
       RHS.Emit(cg, ref rhsType);
       cg.EmitDup();
       LHS.EmitSet(cg, rhsType);
@@ -504,16 +545,16 @@ public class BlockNode : ASTNode
     if(nodes != null) Children.AddRange(nodes);
   }
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
     get
     {
       ASTNode lastChild = LastChild;
-      return lastChild == null ? typeof(void) : LastChild.ValueType;
+      return lastChild == null ? TypeWrapper.Void : LastChild.ValueType;
     }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
     if(Children.Count != 0)
     {
@@ -524,7 +565,7 @@ public class BlockNode : ASTNode
       
       LastChild.Emit(cg, ref desiredType);
     }
-    else if(desiredType != typeof(void))
+    else if(!IsVoid(desiredType))
     {
       cg.EmitDefault(desiredType);
       TailReturn(cg);
@@ -572,7 +613,7 @@ public class ContainerNode : NonExecutableNode
 #region FunctionBaseNode
 public abstract class FunctionNode : ASTNode
 {
-  public FunctionNode(string name, Type returnType, ParameterNode[] parameters, ASTNode body) : base(true)
+  public FunctionNode(string name, ITypeInfo returnType, ParameterNode[] parameters, ASTNode body) : base(true)
   {
     if(parameters == null || body == null) throw new ArgumentNullException();
     ParameterNode.Validate(parameters, out RequiredParameterCount, out OptionalParameterCount,
@@ -596,11 +637,20 @@ public abstract class FunctionNode : ASTNode
     get { return Children[1].Children; }
   }
 
+  public bool CreatesClosure
+  {
+    get { return Closures != null && Closures.Length != 0; }
+  }
+
   public readonly string Name;
+  /// <summary>Gets the closure slots defined by this function. If set to a non-empty array, this method will create a
+  /// new closure.
+  /// </summary>
+  public ClosureSlot[] Closures;
   public readonly int RequiredParameterCount, OptionalParameterCount;
   public readonly bool HasListParameter, HasDictParameter;
 
-  public Type ReturnType
+  public ITypeInfo ReturnType
   {
     get { return returnType == null ? Body.ValueType : returnType; }
     set { returnType = value; }
@@ -618,7 +668,7 @@ public abstract class FunctionNode : ASTNode
     Body.MarkTail(true); // the body starts in a new function, so it always has a new tail
   }
 
-  Type returnType;
+  ITypeInfo returnType;
 }
 #endregion
 
@@ -634,12 +684,12 @@ public class LiteralNode : ASTNode
     cached     = emitCachedLiteral;
   }
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
-    get { return Value == null ? null : Value.GetType(); }
+    get { return CG.GetTypeInfo(Value); }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
     if(cached)
     {
@@ -673,12 +723,12 @@ public class OpNode : ASTNode
     Children.AddRange(values);
   }
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
     get { return Operator.GetValueType(Children); }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
     cg.EmitTypedOperator(Operator, desiredType, Children);
     TailReturn(cg);
@@ -698,12 +748,12 @@ public abstract class NonExecutableNode : ASTNode
 {
   protected NonExecutableNode(bool isContainerNode) : base(isContainerNode) { }
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
     get { throw new NotSupportedException(); }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
     throw new NotSupportedException();
   }
@@ -723,11 +773,11 @@ public enum ParameterType
 
 public class ParameterNode : NonExecutableNode
 {
-  public ParameterNode(string name) : this(name, typeof(object)) { }
-  public ParameterNode(string name, Type valueType) : this(name, valueType, ParameterType.Normal, null) { }
-  public ParameterNode(string name, Type valueType, ParameterType paramType)
+  public ParameterNode(string name) : this(name, TypeWrapper.Object) { }
+  public ParameterNode(string name, ITypeInfo valueType) : this(name, valueType, ParameterType.Normal, null) { }
+  public ParameterNode(string name, ITypeInfo valueType, ParameterType paramType)
     : this(name, valueType, paramType, null) { }
-  public ParameterNode(string name, Type valueType, ParameterType paramType, ASTNode defaultValue)
+  public ParameterNode(string name, ITypeInfo valueType, ParameterType paramType, ASTNode defaultValue)
     : base(true)
   {
     if(name == null || valueType == null) throw new ArgumentNullException();
@@ -741,11 +791,11 @@ public class ParameterNode : NonExecutableNode
       if(defaultValue != null) throw new ArgumentException("List and Dict parameters cannot have default values.");
       if(paramType == ParameterType.List)
       {
-        Type = CompilerState.Current.Language.ParameterListType;
+        Type = TypeWrapper.Get(CompilerState.Current.Language.ParameterListType);
       }
       else if(paramType == ParameterType.Dict)
       {
-        Type = CompilerState.Current.Language.ParameterDictionaryType;
+        Type = TypeWrapper.Get(CompilerState.Current.Language.ParameterDictionaryType);
       }
     }
   }
@@ -767,9 +817,14 @@ public class ParameterNode : NonExecutableNode
     }
   }
 
+  public FunctionNode Function
+  {
+    get { return parent == null ? null : (FunctionNode)parent.parent; }
+  }
+
   public readonly string Name;
   public readonly ParameterType ParameterType;
-  public readonly Type Type;
+  public readonly ITypeInfo Type;
   
   public static string[] GetNames(ParameterNode[] parameters)
   {
@@ -791,9 +846,9 @@ public class ParameterNode : NonExecutableNode
     return parameters;
   }
 
-  public static Type[] GetTypes(ParameterNode[] parameters)
+  public static ITypeInfo[] GetTypes(ParameterNode[] parameters)
   {
-    Type[] types = new Type[parameters.Length];
+    ITypeInfo[] types = new ITypeInfo[parameters.Length];
     for(int i=0; i<types.Length; i++)
     {
       types[i] = parameters[i].Type;
@@ -859,19 +914,19 @@ public class ScriptFunctionNode : FunctionNode
     : this(CompilerState.Current.Language, name, parameters, body) { }
 
   public ScriptFunctionNode(Language language, string name, ParameterNode[] parameters, ASTNode body)
-    : base(name, typeof(object), parameters, body)
+    : base(name, TypeWrapper.Object, parameters, body)
   {
     Language = language;
   }
 
   public readonly Language Language;
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
-    get { return typeof(ICallableWithKeywords); }
+    get { return TypeWrapper.Get(typeof(ICallableWithKeywords)); }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
     currentIndex = functionIndex.Next;
 
@@ -880,14 +935,14 @@ public class ScriptFunctionNode : FunctionNode
 
     if(HasListParameter || HasDictParameter) throw new NotImplementedException(); // method wrappers won't handle this properly
     
-    if(desiredType != typeof(void))
+    if(!IsVoid(desiredType))
     {
       // create the function wrapper
       ITypeInfo wrapperType = cg.Assembly.GetMethodWrapper(method);
       // instantiate it in the private class and store a reference to it
       cg.ILG.Emit(OpCodes.Ldftn, method.Method);
       cg.EmitBool(true); // isStatic
-      cg.EmitNew(wrapperType, typeof(IntPtr), typeof(bool));
+      cg.EmitNew(wrapperType, TypeWrapper.IntPtr, TypeWrapper.Bool);
       cg.EmitRuntimeConversion(ValueType, desiredType);
     }
 
@@ -903,7 +958,12 @@ public class ScriptFunctionNode : FunctionNode
   {
     if(generatedMethod == null)
     {
-      generatedMethod = MakeDotNetMethod(ag.GetPrivateClass());
+      ScriptFunctionNode parentFunc = GetAncestor<ScriptFunctionNode>();
+      TypeGenerator containingClass = null;
+      if(parentFunc != null) containingClass = parentFunc.closureClass;
+      if(containingClass == null) containingClass = ag.GetPrivateClass();
+
+      generatedMethod = MakeDotNetMethod(containingClass);
     }
     return generatedMethod;
   }
@@ -970,12 +1030,12 @@ public class ScriptFunctionNode : FunctionNode
     return Parameters.Count == 0 ? null : ParameterNode.GetNames(GetParameterArray());
   }
 
-  Type[] GetParameterTypes()
+  ITypeInfo[] GetParameterTypes()
   {
     bool allObject = true;
     foreach(ParameterNode param in Parameters)
     {
-      if(param.Type != typeof(object))
+      if(param.Type != TypeWrapper.Object)
       {
         allObject = false;
         break;
@@ -987,9 +1047,11 @@ public class ScriptFunctionNode : FunctionNode
 
   IMethodInfo MakeDotNetMethod(TypeGenerator containingClass)
   {
-    string name = "lambda$" + currentIndex + Name;
-    CodeGenerator methodCg = containingClass.DefineStaticMethod(name, ReturnType,
-                                                                ParameterNode.GetTypes(GetParameterArray()));
+    MethodAttributes attributes = MethodAttributes.Public;
+    if(!CreatesClosure) attributes |= MethodAttributes.Static;
+
+    CodeGenerator methodCg = containingClass.DefineMethod(attributes, "lambda$" + currentIndex + Name, ReturnType,
+                                                          ParameterNode.GetTypes(GetParameterArray()));
 
     // add names for the parameters
     MethodBuilderWrapper mb = (MethodBuilderWrapper)methodCg.Method;
@@ -998,35 +1060,18 @@ public class ScriptFunctionNode : FunctionNode
       mb.DefineParameter(i, ParameterAttributes.In, ((ParameterNode)Parameters[i]).Name);
     }
 
+    if(CreatesClosure)
+    {
+      closureClass = methodCg.SetupClosure(Closures, false);
+    }
+
     methodCg.EmitTypedNode(Body, ReturnType);
     methodCg.Finish();
     return (IMethodInfo)methodCg.Method;
   }
 
-  DynamicMethodClosure MakeDynamicMethod(CodeGenerator cg)
-  {
-    throw new NotImplementedException();
-    /*DynamicMethod method =
-      new DynamicMethod(Name == null ? "function" : Name, ReturnType, new Type[] {
-                          typeof(DynamicMethodClosure), typeof(DynamicMethodEnvironment), typeof(object[]) },
-                        typeof(DynamicMethodClosure));
-
-    method.DefineParameter(1, ParameterAttributes.In, "this"); // add names for the parameters
-    method.DefineParameter(2, ParameterAttributes.In, "ENV");
-    method.DefineParameter(3, ParameterAttributes.In, "ARGS");
-    
-    CodeGenerator methodCg = new CodeGenerator(cg.Assembly, method, typeof(DynamicMethodClosure));
-    methodCg.EmitTypedNode(Body, ReturnType);
-    Binding[] bindings  = methodCg.GetCachedBindings();
-    object[]  constants = methodCg.GetCachedNonBindings();
-    methodCg.Finish();
-    
-    FunctionTemplate template = current language new FunctionTemplate(IntPtr.Zero, Name, GetParameterNames(), GetParameterTypes(),
-                                                     RequiredParameterCount, false, false, false);
-    return new DynamicMethodClosure(method, template, bindings, constants);*/
-  }
-
   IMethodInfo generatedMethod;
+  TypeGenerator closureClass;
   long currentIndex;
 
   static Index functionIndex = new Index();
@@ -1050,7 +1095,7 @@ public class VariableNode : AssignableNode
   public readonly string Name;
   public Slot Slot;
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
     get
     {
@@ -1059,7 +1104,7 @@ public class VariableNode : AssignableNode
     }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
     AssertValidSlot();
     Slot.EmitGet(cg);
@@ -1073,7 +1118,7 @@ public class VariableNode : AssignableNode
     Slot.EmitSet(cg, valueNode);
   }
 
-  public override void EmitSet(CodeGenerator cg, Type typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
     AssertValidSlot();
     Slot.EmitSet(cg, typeOnStack);

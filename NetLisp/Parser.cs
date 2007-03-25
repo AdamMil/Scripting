@@ -91,7 +91,7 @@ public class Parser : ParserBase
                 if(hasList)
                 {
                   ParameterNode last = parameters[parameters.Length-1];
-                  parameters[parameters.Length-1] = new ParameterNode(last.Name, typeof(Pair), ParameterType.List);
+                  parameters[parameters.Length-1] = new ParameterNode(last.Name, LispTypes.Pair, ParameterType.List);
                 }
                 ret = new ScriptFunctionNode(null, parameters, ParseBody());
                 break;

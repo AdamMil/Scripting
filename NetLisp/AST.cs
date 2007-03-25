@@ -11,8 +11,15 @@ using NetLisp.Runtime;
 namespace NetLisp.AST
 {
 
+#region LispTypes
+public static class LispTypes
+{
+  public static readonly TypeWrapper Pair = TypeWrapper.Get(typeof(Pair));
+}
+#endregion
+
 #region VariableSlotResolver
-sealed class VariableSlotResolver : PrefixVisitor
+public class VariableSlotResolver : PrefixVisitor
 {
   public VariableSlotResolver(DecoratorType type) : base(type) { }
 
@@ -21,14 +28,33 @@ sealed class VariableSlotResolver : PrefixVisitor
     get { return Stage.Decorate; }
   }
 
+  public override void Process(ref ASTNode rootNode)
+  {
+    RecursiveVisit(rootNode);
+  }
+
   protected override bool Visit(ASTNode node)
   {
     if(node is VariableNode) // if it's a variable node, set its slot if necessary
     {
-      VariableNode var = (VariableNode)node;
-      if(var.Slot == null)
+      Binding binding = bindings[UpdateBinding((VariableNode)node)].Value;
+      binding.Usage |= Usage.Read; // mark that this variable has been read
+      // if it hasn't been written or initialized, mark that it was read before it had a value
+      if((binding.Usage & (Usage.Initialized|Usage.Written)) == 0)
       {
-        var.Slot = FindSlot(var.Name);
+        binding.Usage |= Usage.ReadBeforeInitialized;
+      }
+    }
+    else if(node is AssignNode)
+    {
+      AssignNode assign = (AssignNode)node;
+      VariableNode var = assign.LHS as VariableNode;
+
+      if(var != null) // if assigning to a variable, mark the variable as having been written to
+      {
+        RecursiveVisit(assign.RHS); // visit the right side first to so we can mark ReadBeforeInitialized for "var a=a"
+        bindings[UpdateBinding(var)].Value.Usage |= Usage.Written;
+        return false;
       }
     }
     else if(node is LocalBindingNode) // if it's a binding node, add the bound variables to the array
@@ -44,66 +70,241 @@ sealed class VariableSlotResolver : PrefixVisitor
       // now add the new bindings
       foreach(LocalBindingNode.Binding binding in bind.Bindings)
       {
-        Slot slot = DecoratorType == DecoratorType.Compiled ?
-          new LocalProxySlot(binding.Name, binding.Type) : (Slot)new InterpretedLocalSlot(binding.Name, binding.Type);
-        slots.Add(new KeyValuePair<string,Slot>(binding.Name, slot));
-
-        binding.Variable.Slot = slot;
+        Slot slot = IsCompiled ? new LocalProxySlot(binding.Name, binding.Type)
+                               : (Slot)new InterpretedLocalSlot(binding.Name, binding.Type);
+        bindings.Add(new KeyValuePair<string,Binding>(binding.Name, new Binding(slot, false)));
+        UpdateBinding(binding.Variable);
       }
 
-      RecursiveVisit(bind.Body);
+      RecursiveVisit(bind.Body); // process the body of the 'let'
       
-      // remove the bindings we added
-      slots.RemoveRange(slots.Count-bind.Bindings.Count, bind.Bindings.Count);
+      // then remove the bindings we added
+      bindings.RemoveRange(bindings.Count-bind.Bindings.Count, bind.Bindings.Count);
       return false;
     }
     else if(node is FunctionNode)
     {
       FunctionNode func = (FunctionNode)node;
-
+      
       // first visit the default parameter values, since they'll be executed outside the function body
       foreach(ParameterNode param in func.Parameters)
       {
         if(param.DefaultValue != null) RecursiveVisit(param.DefaultValue);
       }
 
+      // in compiled mode, we need to keep track of where the function declarations start, so we can tell if a variable
+      // is used outside of its function and needs to be included in a closure.
+      if(IsCompiled)
+      {
+        if(functions == null) functions = new List<Function>();
+        functions.Add(new Function(bindings.Count));
+      }
+
       // now add the new bindings
       foreach(ParameterNode param in func.Parameters)
       {
-        Slot slot = DecoratorType == DecoratorType.Compiled ?
-          new ParameterSlot(param.Index, param.Type) : (Slot)new InterpretedLocalSlot(param.Name, param.Type);
-        slots.Add(new KeyValuePair<string, Slot>(param.Name, slot));
+        Slot slot = IsCompiled ? new ParameterSlot(param.Index, param.Type)
+                               : (Slot)new InterpretedLocalSlot(param.Name, param.Type);
+        bindings.Add(new KeyValuePair<string,Binding>(param.Name, new Binding(slot, true)));
       }
-      
-      RecursiveVisit(func.Body);
 
-      // remove the bindings we added
-      slots.RemoveRange(slots.Count-func.Parameters.Count, func.Parameters.Count);
+      RecursiveVisit(func.Body); // process the body of the function
+
+      if(IsCompiled) // in compiled mode, we need to tell the function what closures it has so it can create a
+      {              // closure class if necessary. we also need to calculate closure depth for each reference.
+        Function function = functions[functions.Count-1];
+        functions.RemoveAt(functions.Count-1);
+
+        if(function.Closures != null) // the function defines a closure
+        {
+          System.Collections.Specialized.ListDictionary depths = new System.Collections.Specialized.ListDictionary();
+          List<string> names = new List<string>();
+
+          func.Closures = new ClosureSlot[function.Closures.Count];
+          for(int i=0; i<function.Closures.Count; i++)
+          {
+            Binding binding     = function.Closures[i];
+            ClosureSlot closure = (ClosureSlot)binding.Slot;
+            func.Closures[i]    = closure;
+
+            // uniquify slot names if necessary
+            if(names.Contains(closure.Name))
+            {
+              int suffix = 2;
+              while(!names.Contains(closure.Name + suffix))
+              {
+                suffix++;
+              }
+              closure.Name += suffix;
+            }
+            names.Add(closure.Name);
+
+            // for each reference to the binding, calculate the depth. if the variables are defined within the current
+            // function, they'll have a depth of zero. in nested functions, they'll have a depth of one, although any
+            // additional closures created by nested functions increases the depth further by one.
+            foreach(VariableNode var in binding.References)
+            {
+              FunctionNode referencingFunction = var.GetAncestor<FunctionNode>();
+              if(referencingFunction != func) // if the variable defining this reference is not the current function,
+              {                               // the slot does not have a depth of zero. calculate the depth.
+                FunctionNode funcNode = referencingFunction;
+                int depth = 1;
+                while(funcNode != node)
+                {
+                  if(funcNode.CreatesClosure) depth++;
+                  funcNode = funcNode.GetAncestor<FunctionNode>();
+                }
+
+                // create a new slot with the right depth if necessary, or retrieve a cached one.
+                ClosureSlot slot = (ClosureSlot)depths[depth];
+                if(slot == null) depths[depth] = slot = closure.CloneWithDepth(depth);
+                var.Slot = slot;
+              }
+            }
+            
+            depths.Clear(); // clear the dictionary of cached slots
+          }
+        }
+      }
+
+      // then remove the bindings we added
+      bindings.RemoveRange(bindings.Count-func.Parameters.Count, func.Parameters.Count);
       return false;
     }
 
     return true;
   }
 
-  Slot FindSlot(string name)
+  sealed class Binding
   {
-    for(int i=slots.Count-1; i>=0; i--) // see if this variable has been defined before
+    public Binding(Slot slot, bool preInitialized)
     {
-      if(string.Equals(name, slots[i].Key, StringComparison.Ordinal))
+      this.Slot  = slot;
+      this.Usage = preInitialized ? Usage.Initialized : Usage.None;
+    }
+
+    public void AddReference(VariableNode var)
+    {
+      if(References == null) References = new List<VariableNode>();
+      References.Add(var);
+    }
+
+    public Slot Slot;
+    public List<VariableNode> References;
+    public Usage Usage;
+    public bool  InClosure;
+  }
+
+  sealed class Function
+  {
+    public Function(int bindingStart)
+    {
+      BindingStart = bindingStart;
+    }
+
+    public void AddClosure(Binding closureBinding)
+    {
+      if(Closures == null) Closures = new List<Binding>();
+      Closures.Add(closureBinding);
+    }
+
+    public List<Binding> Closures;
+    public int BindingStart;
+  }
+
+  /// <summary>This enum describes the way in which a <see cref="Binding"/> has been used.</summary>
+  [Flags]
+  enum Usage
+  {
+    /// <summary>The binding was unused.</summary>
+    None=0,
+    /// <summary>The binding was read from during its lifespan.</summary>
+    Read=1,
+    /// <summary>The binding was assigned to during its lifespan.</summary>
+    Written=2,
+    /// <summary>The binding was initialized from the very beginning of its lifespan. A function parameter is an
+    /// example of this kind of binding.
+    /// </summary>
+    Initialized=4,
+    /// <summary>The binding was read before it was written to or initialized.</summary>
+    ReadBeforeInitialized=8
+  }
+
+  int FindBinding(VariableNode var)
+  {
+    for(int i=bindings.Count-1; i>=0; i--)
+    {
+      if(string.Equals(var.Name, bindings[i].Key, StringComparison.Ordinal))
       {
-        return slots[i].Value;
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  Function FindFunction(int index)
+  {
+    for(int i=functions.Count-1; i>=0; i--)
+    {
+      if(index >= functions[i].BindingStart) return functions[i];
+    }
+    return null;
+  }
+
+  int UpdateBinding(VariableNode var)
+  {
+    int index = FindBinding(var); // see if this variable has been defined before
+    if(index != -1)
+    {
+      Binding binding = bindings[index].Value;
+
+      if(var.Slot == null) var.Slot = binding.Slot; // update the variable slot to use the binding slot
+      binding.AddReference(var);
+
+      // if the slot is defined in a function other than the current function, and it's not already in a closure,
+      // we need to make it into a closure slot. this doesn't take into account closure depth. that's done after
+      // the processing for the function is complete.
+      if(!binding.InClosure && functions != null && functions.Count > 1 && !(binding.Slot is TopLevelSlot) &&
+         index >= functions[0].BindingStart && index < functions[functions.Count-1].BindingStart)
+      {
+        Slot initializeSlot = (binding.Usage & Usage.Initialized) == 0 ? null : binding.Slot;
+
+        ClosureSlot slot = new ClosureSlot(var.Name, binding.Slot.Type, initializeSlot);
+        foreach(VariableNode node in binding.References) // update all the references to the binding
+        {
+          node.Slot = slot;
+        }
+
+        binding.Slot      = slot;
+        binding.InClosure = true; // mark that this binding is in a closure
+        
+        FindFunction(index).AddClosure(binding); // add this closure to the function definition
+      }
+      
+      return index;
+    }
+
+    if(string.IsNullOrEmpty(var.Name)) throw new ArgumentException("Variable name cannot be empty.");
+
+    // if not, assume it's a global variable reference and insert a binding for it.
+    var.Slot = new TopLevelSlot(var.Name);
+
+    if(functions != null) // since we'll be inserting a value, we may need to update the function binding indices
+    {
+      foreach(Function func in functions)
+      {
+        func.BindingStart++;
       }
     }
 
-    if(string.IsNullOrEmpty(name)) throw new ArgumentException("Variable name cannot be empty.");
-
-    // if not, assume it's a global variable reference and insert a slot so we don't keep returning new slot objects
-    Slot global = new TopLevelSlot(name);
-    slots.Insert(0, new KeyValuePair<string,Slot>(name, global));
-    return global;
+    Binding globalBinding = new Binding(var.Slot, false);
+    globalBinding.AddReference(var);
+    bindings.Insert(0, new KeyValuePair<string,Binding>(var.Name, globalBinding));
+    return 0;
   }
 
-  List<KeyValuePair<string,Slot>> slots = new List<KeyValuePair<string,Slot>>();
+  List<KeyValuePair<string,Binding>> bindings = new List<KeyValuePair<string,Binding>>();
+  List<Function> functions;
 }
 #endregion
 
@@ -126,15 +327,15 @@ public sealed class CallNode : ASTNode
     get { return Children[0]; }
   }
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
-    get { return typeof(object); }
+    get { return TypeWrapper.Object; }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
     bool doTailCall = IsTail && desiredType == ValueType;  // TODO: don't emit the tailcall if we're inside a try/catch block
-    cg.EmitTypedNode(Function, typeof(ICallable));
+    cg.EmitTypedNode(Function, TypeWrapper.ICallable);
     cg.EmitObjectArray(Arguments);
     if(doTailCall) cg.ILG.Emit(OpCodes.Tailcall);
     cg.EmitCall(typeof(ICallable), "Call");
@@ -191,24 +392,24 @@ public class IfNode : ASTNode
     }
   }
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
     get { return IfFalse == null ? IfTrue.ValueType : CG.GetCommonBaseType(IfTrue.ValueType, IfFalse.ValueType); }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
-    cg.EmitTypedOperator(Operator.LogicalTruth, typeof(bool), Condition);
+    cg.EmitTypedOperator(Operator.LogicalTruth, TypeWrapper.Bool, Condition);
 
     Label end = cg.ILG.DefineLabel();
-    Label falseLabel = desiredType == typeof(void) && IfFalse == null ? end : cg.ILG.DefineLabel();
-    Type valueType   = IfFalse == null ? desiredType : ValueType;
+    Label falseLabel = IsVoid(desiredType) && IfFalse == null ? end : cg.ILG.DefineLabel();
+    ITypeInfo valueType = IfFalse == null ? desiredType : ValueType;
 
     cg.ILG.Emit(OpCodes.Brfalse, falseLabel); // jump to the false branch (or end) if the condition is false
     cg.EmitTypedNode(IfTrue, valueType);      // emit the true branch
 
     // emit the false branch
-    if(desiredType != typeof(void) || IfFalse != null)
+    if(!IsVoid(desiredType) || IfFalse != null)
     {
       cg.ILG.Emit(OpCodes.Br, end);
       cg.ILG.MarkLabel(falseLabel);
@@ -216,7 +417,7 @@ public class IfNode : ASTNode
       {
         cg.EmitTypedNode(IfFalse, valueType);
       }
-      else if(desiredType != typeof(void))
+      else if(!IsVoid(desiredType))
       {
         cg.EmitDefault(valueType);
       }
@@ -268,19 +469,19 @@ public sealed class ListNode : ASTNode
     get { return Children.Count >= 2 ? Children[1] : null; }
   }
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
-    get { return typeof(Pair); }
+    get { return LispTypes.Pair; }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
     if(ListItems.Count == 0)
     {
       cg.EmitNull();
       cg.EmitRuntimeConversion(null, desiredType);
     }
-    else if(desiredType == typeof(void))
+    else if(IsVoid(desiredType))
     {
       cg.EmitVoids(ListItems);
       if(DotItem != null) cg.EmitVoid(DotItem);
@@ -289,14 +490,14 @@ public sealed class ListNode : ASTNode
     {
       ConstructorInfo cons = typeof(Pair).GetConstructor(new Type[] { typeof(object), typeof(object) });
 
-      foreach(ASTNode node in ListItems) cg.EmitTypedNode(node, typeof(object));
+      foreach(ASTNode node in ListItems) cg.EmitTypedNode(node, TypeWrapper.Object);
 
       if(DotItem == null) cg.EmitNull();
-      else cg.EmitTypedNode(DotItem, typeof(object));
+      else cg.EmitTypedNode(DotItem, TypeWrapper.Object);
 
       for(int i=0; i<ListItems.Count; i++) cg.EmitNew(cons);
 
-      cg.EmitRuntimeConversion(typeof(Pair), desiredType);
+      cg.EmitRuntimeConversion(LispTypes.Pair, desiredType);
     }
     
     TailReturn(cg);
@@ -319,11 +520,11 @@ public sealed class LocalBindingNode : ASTNode
 {
   public LocalBindingNode(string name, ASTNode init, ASTNode body) 
     : this(new string[] { name }, new ASTNode[] { init }, null, body) { }
-  public LocalBindingNode(string name, ASTNode init, Type type, ASTNode body)
-    : this(new string[] { name }, new ASTNode[] { init }, new Type[] { type }, body) { }
+  public LocalBindingNode(string name, ASTNode init, ITypeInfo type, ASTNode body)
+    : this(new string[] { name }, new ASTNode[] { init }, new ITypeInfo[] { type }, body) { }
   public LocalBindingNode(string[] names, ASTNode[] inits, ASTNode body) : this(names, inits, null, body) { }
 
-  public LocalBindingNode(string[] names, ASTNode[] inits, Type[] types, ASTNode body) : base(true)
+  public LocalBindingNode(string[] names, ASTNode[] inits, ITypeInfo[] types, ASTNode body) : base(true)
   {
     if(names == null || body == null) throw new ArgumentNullException();
     if(inits != null && inits.Length != names.Length || types != null && types.Length != names.Length)
@@ -343,10 +544,12 @@ public sealed class LocalBindingNode : ASTNode
   #region Binding
   public sealed class Binding : NonExecutableNode
   {
-    public Binding(string name, ASTNode initialValue, Type type) : base(true)
+    public Binding(string name, ASTNode initialValue, ITypeInfo type) : base(true)
     {
-      Children.Add(new VariableNode(name, new TopLevelSlot(name, type == null ? typeof(object) : type)));
+      if(name == null) throw new ArgumentNullException();
+      Children.Add(new VariableNode(name));
       if(initialValue != null) Children.Add(initialValue);
+      this.type = type == null ? TypeWrapper.Object : type;
     }
 
     public ASTNode InitialValue
@@ -359,15 +562,17 @@ public sealed class LocalBindingNode : ASTNode
       get { return Variable.Name; }
     }
 
-    public Type Type
+    public ITypeInfo Type
     {
-      get { return Variable.ValueType; }
+      get { return type; }
     }
 
     public VariableNode Variable
     {
       get { return (VariableNode)Children[0]; }
     }
+    
+    readonly ITypeInfo type;
   }
   #endregion
 
@@ -381,12 +586,12 @@ public sealed class LocalBindingNode : ASTNode
     get { return Children[1]; }
   }
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
     get { return Body.ValueType; }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
     cg.BeginScope();
     foreach(Binding binding in Bindings)
@@ -418,7 +623,7 @@ public sealed class LocalBindingNode : ASTNode
         {
           if(binding.Type.IsValueType)
           {
-            initialValue = Activator.CreateInstance(binding.Type);
+            initialValue = Activator.CreateInstance(binding.Type.DotNetType);
           }
           else
           {
@@ -430,7 +635,7 @@ public sealed class LocalBindingNode : ASTNode
           initialValue = binding.InitialValue == null ? null : binding.InitialValue.Evaluate();
           if(binding.Type != typeof(object))
           {
-            initialValue = Ops.ConvertTo(initialValue, binding.Type);
+            initialValue = Ops.ConvertTo(initialValue, binding.Type.DotNetType);
           }
         }
 
@@ -470,14 +675,14 @@ public sealed class VectorNode : ASTNode
     }
   }
 
-  public override Type ValueType
+  public override ITypeInfo ValueType
   {
     get { return GetElementType().MakeArrayType(); }
   }
 
-  public override void Emit(CodeGenerator cg, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
-    if(desiredType == typeof(void))
+    if(IsVoid(desiredType))
     {
       cg.EmitVoids(Children);
     }
@@ -491,7 +696,7 @@ public sealed class VectorNode : ASTNode
 
   public override object Evaluate()
   {
-    Type type = GetElementType();
+    Type type = GetElementType().DotNetType;
     Array array = Array.CreateInstance(type, Children.Count);
     for(int i=0; i<array.Length; i++)
     {
@@ -500,7 +705,7 @@ public sealed class VectorNode : ASTNode
     return array;
   }
 
-  Type GetElementType()
+  ITypeInfo GetElementType()
   {
     if(elementType == null)
     {
@@ -509,7 +714,7 @@ public sealed class VectorNode : ASTNode
     return elementType;
   }
 
-  Type elementType;
+  ITypeInfo elementType;
 }
 #endregion
 

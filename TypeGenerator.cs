@@ -12,7 +12,7 @@ public sealed class TypeGenerator : ITypeInfo
   {
     this.Assembly      = assembly;
     this.TypeBuilder   = builder;
-    this.baseType      = baseType;
+    this.baseType      = baseType == null ? TypeWrapper.Object : baseType;
     this.declaringType = declaringType;
   }
 
@@ -30,7 +30,7 @@ public sealed class TypeGenerator : ITypeInfo
   /// <summary>Creates a public constructor with the given parameter types, and emits code to call the base constructor
   /// with the same parameter types.
   /// </summary>
-  public CodeGenerator DefineChainedConstructor(params Type[] paramTypes)
+  public CodeGenerator DefineChainedConstructor(params ITypeInfo[] paramTypes)
   {
     return DefineChainedConstructor(baseType.GetConstructor(InstanceSearch, paramTypes));
   }
@@ -51,9 +51,10 @@ public sealed class TypeGenerator : ITypeInfo
     if(parent.Method.IsPrivate) throw new ArgumentException("Private constructors cannot be called.");
 
     IParameterInfo[] parameters = parent.GetParameters();
-    Type[] paramTypes = GetTypes(parameters);
+    ITypeInfo[] paramTypes = ReflectionWrapperHelper.GetTypes(parameters);
 
-    ConstructorBuilder cb = TypeBuilder.DefineConstructor(attributes, CallingConventions.Standard, paramTypes);
+    ConstructorBuilder cb = TypeBuilder.DefineConstructor(attributes, CallingConventions.Standard,
+                                                          ReflectionWrapperHelper.Unwrap(paramTypes));
 
     for(int i=0; i<parameters.Length; i++) // define the parameters
     {
@@ -65,7 +66,7 @@ public sealed class TypeGenerator : ITypeInfo
       }
     }
 
-    CodeGenerator cg = CreateCodeGenerator(new ConstructorBuilderWrapper(cb, paramTypes));
+    CodeGenerator cg = CreateCodeGenerator(new ConstructorBuilderWrapper(this, cb, paramTypes));
     // emit the code to call the parent constructor
     cg.EmitThis();
     for(int i=0; i<parameters.Length; i++) cg.EmitArgGet(i);
@@ -80,16 +81,17 @@ public sealed class TypeGenerator : ITypeInfo
   }
 
   /// <summary>Defines a new public constructor that takes the given parameter types.</summary>
-  public CodeGenerator DefineConstructor(params Type[] types)
+  public CodeGenerator DefineConstructor(params ITypeInfo[] types)
   {
     return DefineConstructor(MethodAttributes.Public, types);
   }
 
   /// <summary>Defines a new constructor that takes the given parameter types.</summary>
-  public CodeGenerator DefineConstructor(MethodAttributes attributes, params Type[] types)
+  public CodeGenerator DefineConstructor(MethodAttributes attributes, params ITypeInfo[] types)
   {
-    ConstructorBuilder builder = TypeBuilder.DefineConstructor(attributes, CallingConventions.Standard, types);
-    CodeGenerator cg = CreateCodeGenerator(new ConstructorBuilderWrapper(builder, types));
+    ConstructorBuilder builder = TypeBuilder.DefineConstructor(attributes, CallingConventions.Standard,
+                                                               ReflectionWrapperHelper.Unwrap(types));
+    CodeGenerator cg = CreateCodeGenerator(new ConstructorBuilderWrapper(this, builder, types));
 
     // add the constructor to the list of defined constructors
     if(constructors == null) constructors = new List<IConstructorInfo>();
@@ -107,47 +109,48 @@ public sealed class TypeGenerator : ITypeInfo
   /// <summary>Defines a new default constructor.</summary>
   public CodeGenerator DefineDefaultConstructor(MethodAttributes attributes)
   {
-    ConstructorBuilder builder = TypeBuilder.DefineDefaultConstructor(attributes);
-    return CreateCodeGenerator(new ConstructorBuilderWrapper(builder, Type.EmptyTypes));
+    return DefineChainedConstructor(TypeWrapper.EmptyTypes);
   }
 
-  public FieldSlot DefineField(string name, Type type)
+  public FieldSlot DefineField(string name, ITypeInfo type)
   {
     return DefineField(FieldAttributes.Public, name, type);
   }
 
-  public FieldSlot DefineField(FieldAttributes attrs, string name, Type type)
+  public FieldSlot DefineField(FieldAttributes attrs, string name, ITypeInfo type)
   {
     if(string.IsNullOrEmpty(name)) throw new ArgumentException("Name must not be empty.");
     if(type == null) throw new ArgumentNullException();
-    FieldBuilder fieldBuilder = TypeBuilder.DefineField(name, type, attrs);
+    FieldBuilder fieldBuilder = TypeBuilder.DefineField(name, type.DotNetType, attrs);
     if(fields == null) fields = new List<IFieldInfo>();
-    fields.Add(new FieldInfoWrapper(fieldBuilder));
-    return new FieldSlot(fieldBuilder.IsStatic ? null : new ThisSlot(TypeBuilder), fieldBuilder);
+    IFieldInfo field = new FieldInfoWrapper(this, type, fieldBuilder);
+    fields.Add(field);
+    return new FieldSlot(fieldBuilder.IsStatic ? null : new ThisSlot(this), field);
   }
 
-  public CodeGenerator DefineMethod(string name, Type retType, params Type[] paramTypes)
+  public CodeGenerator DefineMethod(string name, ITypeInfo retType, params ITypeInfo[] paramTypes)
   {
     return DefineMethod(MethodAttributes.Public, name, IsSealed, retType, paramTypes);
   }
 
-  public CodeGenerator DefineMethod(string name, bool final, Type retType, params Type[] paramTypes)
+  public CodeGenerator DefineMethod(string name, bool final, ITypeInfo retType, params ITypeInfo[] paramTypes)
   {
     return DefineMethod(MethodAttributes.Public, name, final, retType, paramTypes);
   }
 
-  public CodeGenerator DefineMethod(MethodAttributes attrs, string name, Type retType, params Type[] paramTypes)
+  public CodeGenerator DefineMethod(MethodAttributes attrs, string name, ITypeInfo retType, params ITypeInfo[] paramTypes)
   {
     return DefineMethod(attrs, name, IsSealed, retType, paramTypes);
   }
 
   public CodeGenerator DefineMethod(MethodAttributes attrs, string name, bool final,
-                                    Type retType, params Type[] paramTypes)
+                                    ITypeInfo returnType, params ITypeInfo[] paramTypes)
   {
     if((attrs&MethodAttributes.Static) != 0) attrs &= ~MethodAttributes.Final; // static methods can't be marked final
     else if(final) attrs |= MethodAttributes.Final;
-    MethodBuilder builder = TypeBuilder.DefineMethod(name, attrs, retType, paramTypes);
-    CodeGenerator cg = CreateCodeGenerator(new MethodBuilderWrapper(builder, paramTypes));
+    MethodBuilder builder = TypeBuilder.DefineMethod(name, attrs, returnType.DotNetType,
+                                                     ReflectionWrapperHelper.Unwrap(paramTypes));
+    CodeGenerator cg = CreateCodeGenerator(new MethodBuilderWrapper(this, returnType, builder, paramTypes));
 
     // add the method to the list of defined methods
     if(methods == null) methods = new List<IMethodInfo>();
@@ -161,7 +164,7 @@ public sealed class TypeGenerator : ITypeInfo
     return DefineMethodOverride(baseType.GetMethod(name, InstanceSearch), IsSealed);
   }
 
-  public CodeGenerator DefineMethodOverride(string name, params Type[] paramTypes)
+  public CodeGenerator DefineMethodOverride(string name, params ITypeInfo[] paramTypes)
   {
     return DefineMethodOverride(baseType.GetMethod(name, InstanceSearch, paramTypes), IsSealed);
   }
@@ -171,7 +174,7 @@ public sealed class TypeGenerator : ITypeInfo
     return DefineMethodOverride(baseType.GetMethod(name, InstanceSearch), final);
   }
 
-  public CodeGenerator DefineMethodOverride(string name, bool final, params Type[] paramTypes)
+  public CodeGenerator DefineMethodOverride(string name, bool final, params ITypeInfo[] paramTypes)
   {
     return DefineMethodOverride(baseType.GetMethod(name, InstanceSearch, paramTypes), final);
   }
@@ -197,7 +200,7 @@ public sealed class TypeGenerator : ITypeInfo
 
     IParameterInfo[] parameters = baseMethod.GetParameters();
     MethodBuilder mb = TypeBuilder.DefineMethod(baseMethod.Name, attrs, baseMethod.ReturnType.DotNetType,
-                                                GetTypes(parameters));
+                                                ReflectionWrapperHelper.GetDotNetTypes(parameters));
 
     // define all the parameters to be the same as the base type's
     for(int i=0, offset=mb.IsStatic ? 0 : 1; i<parameters.Length; i++)
@@ -212,7 +215,7 @@ public sealed class TypeGenerator : ITypeInfo
 
     // TODO: figure out how to use this properly
     //TypeBuilder.DefineMethodOverride(mb, baseMethod);
-    CodeGenerator cg = CreateCodeGenerator(new MethodBuilderWrapper(mb, parameters));
+    CodeGenerator cg = CreateCodeGenerator(new MethodBuilderWrapper(this, baseMethod.ReturnType, mb, parameters));
 
     // add the method to the list of defined methods
     if(methods == null) methods = new List<IMethodInfo>();
@@ -222,9 +225,15 @@ public sealed class TypeGenerator : ITypeInfo
   }
 
   /// <summary>Defines a new type nested within this type.</summary>
+  public TypeGenerator DefineNestedType(TypeAttributes attributes, string name)
+  {
+    return DefineNestedType(attributes, name, (ITypeInfo)null);
+  }
+
+  /// <summary>Defines a new type nested within this type.</summary>
   public TypeGenerator DefineNestedType(TypeAttributes attributes, string name, Type baseType)
   {
-    return DefineNestedType(attributes, name, baseType == null ? null : new TypeWrapper(baseType));
+    return DefineNestedType(attributes, name, baseType == null ? null : TypeWrapper.Get(baseType));
   }
 
   /// <summary>Defines a new type nested within this type.</summary>
@@ -238,27 +247,29 @@ public sealed class TypeGenerator : ITypeInfo
   }
 
   /// <summary>Defines a public read-only property with the given name and value type.</summary>
-  public CodeGenerator DefineProperty(string name, Type valueType)
+  public CodeGenerator DefineProperty(string name, ITypeInfo valueType)
   {
-    return DefineProperty(MethodAttributes.Public, name, valueType, Type.EmptyTypes);
+    return DefineProperty(MethodAttributes.Public, name, valueType, TypeWrapper.EmptyTypes);
   }
 
   /// <summary>Defines a read-only property with the given name and value type.</summary>
-  public CodeGenerator DefineProperty(MethodAttributes attributes, string name, Type valueType)
+  public CodeGenerator DefineProperty(MethodAttributes attributes, string name, ITypeInfo valueType)
   {
-    return DefineProperty(attributes, name, valueType, Type.EmptyTypes);
+    return DefineProperty(attributes, name, valueType, TypeWrapper.EmptyTypes);
   }
 
   /// <summary>Defines a public read-only indexer with the given name, value type, and parameter types.</summary>
-  public CodeGenerator DefineProperty(string name, Type valueType, params Type[] paramTypes)
+  public CodeGenerator DefineProperty(string name, ITypeInfo valueType, params ITypeInfo[] paramTypes)
   {
     return DefineProperty(MethodAttributes.Public, name, valueType, paramTypes);
   }
 
   /// <summary>Defines a read-only property with the given name, value type, and parameter types.</summary>
-  public CodeGenerator DefineProperty(MethodAttributes attributes, string name, Type valueType, params Type[] paramTypes)
+  public CodeGenerator DefineProperty(MethodAttributes attributes, string name, ITypeInfo valueType,
+                                      params ITypeInfo[] paramTypes)
   {
-    PropertyBuilder pb = TypeBuilder.DefineProperty(name, PropertyAttributes.None, valueType, paramTypes);
+    PropertyBuilder pb = TypeBuilder.DefineProperty(name, PropertyAttributes.None, valueType.DotNetType,
+                                                    ReflectionWrapperHelper.Unwrap(paramTypes));
     CodeGenerator cg = DefineMethod(attributes, "get_"+name, valueType, paramTypes);
     pb.SetGetMethod((MethodBuilder)cg.Method.Method);
 
@@ -269,29 +280,31 @@ public sealed class TypeGenerator : ITypeInfo
   }
 
   /// <summary>Defines a public read/write property with the given value type.</summary>
-  public void DefineProperty(string name, Type valueType, out CodeGenerator get, out CodeGenerator set)
+  public void DefineProperty(string name, ITypeInfo valueType, out CodeGenerator get, out CodeGenerator set)
   {
-    DefineProperty(MethodAttributes.Public, name, valueType, Type.EmptyTypes, out get, out set);
+    DefineProperty(MethodAttributes.Public, name, valueType, TypeWrapper.EmptyTypes, out get, out set);
   }
 
   /// <summary>Defines a read/write property with the given value type.</summary>
-  public void DefineProperty(MethodAttributes attributes, string name, Type valueType,
+  public void DefineProperty(MethodAttributes attributes, string name, ITypeInfo valueType,
                              out CodeGenerator get, out CodeGenerator set)
   {
-    DefineProperty(attributes, name, valueType, Type.EmptyTypes, out get, out set);
+    DefineProperty(attributes, name, valueType, TypeWrapper.EmptyTypes, out get, out set);
   }
 
   /// <summary>Defines a public read/write indexer with the given value type and parameter types.</summary>
-  public void DefineProperty(string name, Type valueType, Type[] paramTypes, out CodeGenerator get, out CodeGenerator set)
+  public void DefineProperty(string name, ITypeInfo valueType, ITypeInfo[] paramTypes,
+                             out CodeGenerator get, out CodeGenerator set)
   {
     DefineProperty(MethodAttributes.Public, name, valueType, paramTypes, out get, out set);
   }
 
   /// <summary>Defines a read/write property with the given value type and parameter types.</summary>
-  public void DefineProperty(MethodAttributes attributes, string name, Type valueType, Type[] paramTypes,
+  public void DefineProperty(MethodAttributes attributes, string name, ITypeInfo valueType, ITypeInfo[] paramTypes,
                              out CodeGenerator get, out CodeGenerator set)
   {
-    PropertyBuilder pb = TypeBuilder.DefineProperty(name, PropertyAttributes.None, valueType, paramTypes);
+    Type[] dotNetParams = ReflectionWrapperHelper.Unwrap(paramTypes);
+    PropertyBuilder pb = TypeBuilder.DefineProperty(name, PropertyAttributes.None, valueType.DotNetType, dotNetParams);
     get = DefineMethod(attributes, "get_"+name, valueType, paramTypes);
     set = DefineMethod(attributes, "set_"+name, null, paramTypes);
     pb.SetGetMethod((MethodBuilder)get.Method.Method);
@@ -418,25 +431,26 @@ public sealed class TypeGenerator : ITypeInfo
   }
 
   /// <summary>Defines a new public static field.</summary>
-  public FieldSlot DefineStaticField(string name, Type type)
+  public FieldSlot DefineStaticField(string name, ITypeInfo type)
   {
     return DefineStaticField(FieldAttributes.Public, name, type);
   }
 
   /// <summary>Defines a new static field.</summary>
-  public FieldSlot DefineStaticField(FieldAttributes attrs, string name, Type type)
+  public FieldSlot DefineStaticField(FieldAttributes attrs, string name, ITypeInfo type)
   {
     return DefineField(attrs|FieldAttributes.Static, name, type);
   }
 
   /// <summary>Defines a new public static method.</summary>
-  public CodeGenerator DefineStaticMethod(string name, Type retType, params Type[] paramTypes)
+  public CodeGenerator DefineStaticMethod(string name, ITypeInfo retType, params ITypeInfo[] paramTypes)
   {
     return DefineMethod(MethodAttributes.Public|MethodAttributes.Static, name, false, retType, paramTypes);
   }
 
   /// <summary>Defines a new static method.</summary>
-  public CodeGenerator DefineStaticMethod(MethodAttributes attrs, string name, Type retType, params Type[] paramTypes)
+  public CodeGenerator DefineStaticMethod(MethodAttributes attrs, string name, ITypeInfo retType,
+                                          params ITypeInfo[] paramTypes)
   {
     return DefineMethod(attrs|MethodAttributes.Static, name, false, retType, paramTypes);
   }
@@ -470,7 +484,7 @@ public sealed class TypeGenerator : ITypeInfo
     if(initializer == null)
     {
       ConstructorBuilder builder = TypeBuilder.DefineTypeInitializer();
-      initializer = CreateCodeGenerator(new ConstructorBuilderWrapper(builder, Type.EmptyTypes));
+      initializer = CreateCodeGenerator(new ConstructorBuilderWrapper(this, builder, TypeWrapper.EmptyTypes));
     }
     return initializer;
   }
@@ -527,16 +541,6 @@ public sealed class TypeGenerator : ITypeInfo
   CodeGenerator initializer;
   Type finishedType;
 
-  static Type[] GetTypes(IParameterInfo[] parameters)
-  {
-    Type[] paramTypes = new Type[parameters.Length];
-    for(int i=0; i<parameters.Length; i++)
-    {
-      paramTypes[i] = parameters[i].ParameterType.DotNetType;
-    }
-    return paramTypes;
-  }
-
   #region ITypeInfo Members
   public TypeAttributes Attributes
   {
@@ -558,12 +562,32 @@ public sealed class TypeGenerator : ITypeInfo
     get { return TypeBuilder; }
   }
 
+  public ITypeInfo ElementType
+  {
+    get { throw new InvalidOperationException("This is not an array, pointer, or reference type."); }
+  }
+  
+  public string FullName
+  {
+    get { return TypeBuilder.FullName; }
+  }
+
+  public bool IsValueType
+  {
+    get { return TypeBuilder.IsValueType; }
+  }
+
   public string Name
   {
     get { return TypeBuilder.Name; }
   }
 
-  public IConstructorInfo GetConstructor(BindingFlags flags, params Type[] parameterTypes)
+  public TypeCode TypeCode
+  {
+    get { return TypeCode.Object; }
+  }
+
+  public IConstructorInfo GetConstructor(BindingFlags flags, params ITypeInfo[] parameterTypes)
   {
     if(constructors != null)
     {
@@ -595,7 +619,12 @@ public sealed class TypeGenerator : ITypeInfo
     return baseType == null ? null : baseType.GetField(name);
   }
 
-  public IMethodInfo GetMethod(string name, BindingFlags flags, params Type[] parameterTypes)
+  public ITypeInfo[] GetInterfaces()
+  {
+    return baseType == null ? new ITypeInfo[0] : baseType.GetInterfaces();
+  }
+
+  public IMethodInfo GetMethod(string name, BindingFlags flags, params ITypeInfo[] parameterTypes)
   {
     if(methods != null)
     {
@@ -609,7 +638,43 @@ public sealed class TypeGenerator : ITypeInfo
       }
     }
 
-    return baseType == null ? null : baseType.GetMethod(name, flags, parameterTypes);
+    return baseType == null || (flags & BindingFlags.DeclaredOnly) != 0
+      ? null : baseType.GetMethod(name, flags, parameterTypes);
+  }
+
+  public IMethodInfo[] GetMethods(BindingFlags flags)
+  {
+    if(methods == null)
+    {
+      return (flags & BindingFlags.DeclaredOnly) != 0 || baseType == null ?
+        new IMethodInfo[0] : baseType.GetMethods(flags);
+    }
+
+    List<IMethodInfo> matches = new List<IMethodInfo>(methods.Count);
+    foreach(IMethodInfo method in methods)
+    {
+      if(MethodAttributesMatch(flags, method)) matches.Add(method);
+    }
+
+    if(baseType != null && (flags & BindingFlags.DeclaredOnly) == 0)
+    {
+      int numToCheck = matches.Count;
+      foreach(IMethodInfo inheritedMethod in baseType.GetMethods(flags))
+      {
+        bool shadowed = false;
+        for(int i=0; i<numToCheck; i++)
+        {
+          if(SignaturesMatch(matches[i], inheritedMethod))
+          {
+            shadowed = true;
+            break;
+          }
+        }
+        if(!shadowed) matches.Add(inheritedMethod);
+      }
+    }
+
+    return matches.ToArray();
   }
 
   public ITypeInfo GetNestedType(string name)
@@ -643,7 +708,22 @@ public sealed class TypeGenerator : ITypeInfo
 
     return baseType == null ? null : baseType.GetProperty(name);
   }
-  
+
+  public bool IsAssignableFrom(ITypeInfo type)
+  {
+    return TypeBuilder.IsAssignableFrom(type.DotNetType);
+  }
+
+  public bool IsSubclassOf(ITypeInfo type)
+  {
+    return TypeBuilder.IsSubclassOf(type.DotNetType);
+  }
+
+  public ITypeInfo MakeArrayType()
+  {
+    return TypeWrapper.GetArray(this, TypeBuilder.MakeArrayType());
+  }
+
   static bool MethodAttributesMatch(BindingFlags flags, IMethodBase method)
   {
     // if it's searching public and visible publically or searching nonpublic and visible nonpublically, then it matches
@@ -658,17 +738,36 @@ public sealed class TypeGenerator : ITypeInfo
            (flags&BindingFlags.Static)   != 0 &&  method.IsStatic;
   }
   
-  static bool ParametersMatch(Type[] search, IParameterInfo[] method)
+  static bool ParametersMatch(ITypeInfo[] search, IParameterInfo[] method)
   {
     if(search.Length != method.Length) return false;
     for(int i=0; i<search.Length; i++)
     {
-      if(search[i] != method[i].ParameterType.DotNetType)
+      if(search[i] != method[i].ParameterType)
       {
         return false;
       }
     }
     return true;
+  }
+
+  static bool ParametersMatch(IParameterInfo[] search, IParameterInfo[] method)
+  {
+    if(search.Length != method.Length) return false;
+    for(int i=0; i<search.Length; i++)
+    {
+      if(search[i].ParameterType != method[i].ParameterType)
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static bool SignaturesMatch(IMethodInfo a, IMethodInfo b)
+  {
+    return string.Equals(a.Name, b.Name, StringComparison.Ordinal) &&
+           ParametersMatch(a.GetParameters(), b.GetParameters());
   }
   #endregion
 }

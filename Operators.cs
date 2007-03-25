@@ -19,10 +19,10 @@ public abstract class Operator
 
   public readonly string Name;
 
-  public abstract void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref Type desiredType);
+  public abstract void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref ITypeInfo desiredType);
   public abstract void EmitThisOperator(CodeGenerator cg);
   public abstract object Evaluate(IList<ASTNode> nodes);
-  public abstract Type GetValueType(IList<ASTNode> nodes);
+  public abstract ITypeInfo GetValueType(IList<ASTNode> nodes);
   
   public object Evaluate(params object[] values)
   {
@@ -48,7 +48,7 @@ public abstract class UnaryOperator : Operator
 {
   protected UnaryOperator(string name) : base(name) { }
 
-  public override void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref ITypeInfo desiredType)
   {
     if(nodes.Count != 1) throw new ArgumentException();
     Emit(cg, nodes[0], ref desiredType);
@@ -59,16 +59,16 @@ public abstract class UnaryOperator : Operator
     if(nodes.Count != 1) throw new ArgumentException();
     return Evaluate(nodes[0].Evaluate());
   }
-  
-  public sealed override Type GetValueType(IList<ASTNode> nodes)
+
+  public sealed override ITypeInfo GetValueType(IList<ASTNode> nodes)
   {
     if(nodes.Count != 1) throw new ArgumentException();
     return GetValueType(nodes[0]);
   }
 
-  public abstract void Emit(CodeGenerator cg, ASTNode node, ref Type desiredType);
+  public abstract void Emit(CodeGenerator cg, ASTNode node, ref ITypeInfo desiredType);
   public abstract object Evaluate(object obj);
-  public abstract Type GetValueType(ASTNode node);
+  public abstract ITypeInfo GetValueType(ASTNode node);
 }
 #endregion
 
@@ -77,23 +77,23 @@ public class LogicalTruthOperator : UnaryOperator
 {
   public LogicalTruthOperator() : base("truth") { }
 
-  public override void Emit(CodeGenerator cg, ASTNode node, ref Type desiredType)
+  public override void Emit(CodeGenerator cg, ASTNode node, ref ITypeInfo desiredType)
   {
-    Type type = typeof(bool);
+    ITypeInfo type = TypeWrapper.Bool;
     node.Emit(cg, ref type);
 
     if(type != typeof(bool)) // if the node didn't give us a nice friendly boolean, we'll have to call Evaluate()
     {
-      cg.EmitSafeConversion(type, typeof(object));
-      Slot tmp = cg.AllocLocalTemp(typeof(object));
+      cg.EmitSafeConversion(type, TypeWrapper.Object);
+      Slot tmp = cg.AllocLocalTemp(TypeWrapper.Object);
       tmp.EmitSet(cg);
       EmitThisOperator(cg);
       tmp.EmitGet(cg);
       cg.FreeLocalTemp(tmp);
       cg.EmitCall(GetType(), "Evaluate", typeof(object));
-      type = typeof(object);
+      type = TypeWrapper.Object;
       
-      if(desiredType == typeof(bool)) // if the desired type is a boolean, we can unbox the object returned by Evaluate
+      if(desiredType == TypeWrapper.Bool) // if the desired type is a boolean, we can unbox the object returned by Evaluate
       {
         cg.EmitUnsafeConversion(type, desiredType);
         type = desiredType;
@@ -113,9 +113,9 @@ public class LogicalTruthOperator : UnaryOperator
     return obj != null && (!(obj is bool) || (bool)obj); // null and false are false. everything else is true.
   }
 
-  public override Type GetValueType(ASTNode node)
+  public override ITypeInfo GetValueType(ASTNode node)
   {
-    return typeof(bool);
+    return TypeWrapper.Bool;
   }
 }
 #endregion
@@ -152,38 +152,35 @@ public abstract class ArithmeticOperator : NaryOperator
 
   public abstract object Evaluate(object a, object b);
 
-  public sealed override void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref Type desiredType)
+  public sealed override void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref ITypeInfo desiredType)
   {
     if(nodes.Count < 2) throw new ArgumentException();
 
-    Type lhs = nodes[0].ValueType;
+    ITypeInfo lhs = nodes[0].ValueType;
     nodes[0].Emit(cg, ref lhs);
 
     for(int nodeIndex=1; nodeIndex<nodes.Count; nodeIndex++)
     {
-      Type rhs = nodes[nodeIndex].ValueType;
+      ITypeInfo rhs = nodes[nodeIndex].ValueType;
       bool shouldImplicitlyConvertToNumeric = false;
 
       retry:
-      TypeCode ltc = Type.GetTypeCode(lhs), rtc = Type.GetTypeCode(rhs);
+      TypeCode ltc = lhs.TypeCode, rtc = rhs.TypeCode;
 
       if(shouldImplicitlyConvertToNumeric ||
          CG.IsPrimitiveNumeric(ltc) && CG.IsPrimitiveNumeric(rtc)) // if we're dealing with primitive numeric types
       {
-        Type realLhs=lhs, realRhs=rhs; // the real object types that will be converted to numeric
+        ITypeInfo realLhs=lhs, realRhs=rhs; // the real object types that will be converted to numeric
         if(shouldImplicitlyConvertToNumeric)
         {
           lhs = CG.GetImplicitConversionToNumeric(lhs);
           rhs = CG.GetImplicitConversionToNumeric(rhs);
-          ltc = Type.GetTypeCode(lhs);
-          rtc = Type.GetTypeCode(rhs);
-
           cg.EmitSafeConversion(realLhs, lhs); // convert the left side if necessary
         }
 
-        Type type = GetTypeForPrimitiveNumerics(lhs, rhs);
+        ITypeInfo type = GetTypeForPrimitiveNumerics(lhs, rhs);
         cg.EmitSafeConversion(lhs, type);
-        
+
         nodes[nodeIndex].Emit(cg, ref realRhs);
         if(shouldImplicitlyConvertToNumeric) cg.EmitSafeConversion(realRhs, rhs); // convert the right side if necessary
         cg.EmitSafeConversion(rhs, type);
@@ -203,7 +200,7 @@ public abstract class ArithmeticOperator : NaryOperator
         }
 
         // maybe there are implicit conversions to primitive types
-        Type newLhs = CG.GetImplicitConversionToNumeric(lhs), newRhs = CG.GetImplicitConversionToNumeric(rhs);
+        ITypeInfo newLhs = CG.GetImplicitConversionToNumeric(lhs), newRhs = CG.GetImplicitConversionToNumeric(rhs);
         if(newLhs != null && newRhs != null)
         {
           // set a flag indicating that we have implicit conversions to numeric and jump to the top of the loop where
@@ -213,25 +210,25 @@ public abstract class ArithmeticOperator : NaryOperator
         }
 
         // emit a call to the runtime version as a last resort
-        cg.EmitSafeConversion(lhs, typeof(object));
-        Slot tmp = cg.AllocLocalTemp(typeof(object));
+        cg.EmitSafeConversion(lhs, TypeWrapper.Object);
+        Slot tmp = cg.AllocLocalTemp(TypeWrapper.Object);
         tmp.EmitSet(cg);
         EmitThisOperator(cg);
         tmp.EmitGet(cg);
         cg.FreeLocalTemp(tmp);
-        cg.EmitTypedNode(nodes[nodeIndex], typeof(object));
+        cg.EmitTypedNode(nodes[nodeIndex], TypeWrapper.Object);
         cg.EmitCall(GetType(), "Evaluate", typeof(object), typeof(object));
-        lhs = typeof(object);
+        lhs = TypeWrapper.Object;
       }
     }
     
     cg.EmitSafeConversion(lhs, desiredType);
   }
 
-  public override Type GetValueType(IList<ASTNode> nodes)
+  public override ITypeInfo GetValueType(IList<ASTNode> nodes)
   {
     if(nodes.Count == 0) throw new ArgumentException();
-    Type type = nodes[0].ValueType;
+    ITypeInfo type = nodes[0].ValueType;
     for(int nodeIndex=1; nodeIndex<nodes.Count; nodeIndex++)
     {
       type = GetValueType(type, nodes[nodeIndex].ValueType);
@@ -243,11 +240,11 @@ public abstract class ArithmeticOperator : NaryOperator
 
   protected bool NormalizeTypesOrCallOverload(ref object a, ref object b, out object value)
   {
-    Type lhs = CG.GetType(a), rhs = CG.GetType(b);
+    ITypeInfo lhs = CG.GetTypeInfo(a), rhs = CG.GetTypeInfo(b);
 
     if(CG.IsPrimitiveNumeric(lhs) && CG.IsPrimitiveNumeric(rhs)) // if we're dealing with primitive numeric types
     {
-      Type type = GetTypeForPrimitiveNumerics(lhs, rhs);
+      Type type = GetTypeForPrimitiveNumerics(lhs, rhs).DotNetType;
       a = Ops.ConvertTo(a, type);
       b = Ops.ConvertTo(b, type);
       value = null;
@@ -258,15 +255,15 @@ public abstract class ArithmeticOperator : NaryOperator
       Overload overload = GetOperatorOverload(lhs, rhs);
       if(overload != null)
       {
-        value = overload.Method.Invoke(null, new object[] { Ops.ConvertTo(a, overload.LeftParam),
-                                                            Ops.ConvertTo(b, overload.RightParam) });
+        value = overload.Method.Method.Invoke(null, new object[] { Ops.ConvertTo(a, overload.LeftParam.DotNetType),
+                                                                   Ops.ConvertTo(b, overload.RightParam.DotNetType) });
         return true;
       }
 
-      Type newLhs = CG.GetImplicitConversionToNumeric(lhs), newRhs = CG.GetImplicitConversionToNumeric(rhs);
+      ITypeInfo newLhs = CG.GetImplicitConversionToNumeric(lhs), newRhs = CG.GetImplicitConversionToNumeric(rhs);
       if(newLhs != null && newRhs != null)
       {
-        Type type = GetTypeForPrimitiveNumerics(newLhs, newRhs);
+        Type type = GetTypeForPrimitiveNumerics(newLhs, newRhs).DotNetType;
         a = Ops.ConvertTo(a, type);
         b = Ops.ConvertTo(b, type);
         value = null;
@@ -289,18 +286,18 @@ public abstract class ArithmeticOperator : NaryOperator
 
   sealed class Overload
   {
-    public Overload(MethodInfo mi, ParameterInfo[] parms)
+    public Overload(IMethodInfo mi, IParameterInfo[] parms)
     {
       Method     = mi;
       LeftParam  = parms[0].ParameterType;
       RightParam = parms[1].ParameterType;
     }
 
-    public readonly MethodInfo Method;
-    public readonly Type LeftParam, RightParam;
+    public readonly IMethodInfo Method;
+    public readonly ITypeInfo LeftParam, RightParam;
   }
 
-  Overload GetOperatorOverload(Type lhs, Type rhs)
+  Overload GetOperatorOverload(ITypeInfo lhs, ITypeInfo rhs)
   {
     // get a list of all operator overloads between the two types
     List<Overload> overloads = GetOperatorOverloads(lhs, rhs);
@@ -341,9 +338,9 @@ public abstract class ArithmeticOperator : NaryOperator
     return match == -1 ? null : overloads[match];
   }
 
-  List<Overload> GetOperatorOverloads(Type lhs, Type rhs)
+  List<Overload> GetOperatorOverloads(ITypeInfo lhs, ITypeInfo rhs)
   {
-    List<MethodInfo> methods = new List<MethodInfo>();
+    List<IMethodInfo> methods = new List<IMethodInfo>();
     methods.AddRange(lhs.GetMethods(BindingFlags.Public|BindingFlags.Static));
 
     if(lhs != rhs) // if we have two different types, look at both their overrides
@@ -352,7 +349,7 @@ public abstract class ArithmeticOperator : NaryOperator
     }
 
     List<Overload> overloads = new List<Overload>();
-    foreach(MethodInfo mi in methods)
+    foreach(IMethodInfo mi in methods)
     {
       // skip the ones that aren't overloads for our operator
       if(!string.Equals(mi.Name, opOverload, StringComparison.Ordinal))
@@ -361,7 +358,7 @@ public abstract class ArithmeticOperator : NaryOperator
       }
 
       // skip the ones that don't have 2 parameters
-      ParameterInfo[] parameters = mi.GetParameters();
+      IParameterInfo[] parameters = mi.GetParameters();
       if(parameters.Length == 2)
       {
         overloads.Add(new Overload(mi, parameters));
@@ -371,11 +368,11 @@ public abstract class ArithmeticOperator : NaryOperator
     return overloads;
   }
 
-  Type GetValueType(Type lhs, Type rhs)
+  ITypeInfo GetValueType(ITypeInfo lhs, ITypeInfo rhs)
   {
-    Type type;
+    ITypeInfo type;
 
-    if(CG.IsPrimitiveNumeric(lhs) && CG.IsPrimitiveNumeric(rhs)) // if we're dealing with primitive numeric types
+    if(CG.IsPrimitiveNumeric(lhs.DotNetType) && CG.IsPrimitiveNumeric(rhs.DotNetType)) // if they're primitive numerics
     {
       type = GetTypeForPrimitiveNumerics(lhs, rhs);
     }
@@ -388,14 +385,14 @@ public abstract class ArithmeticOperator : NaryOperator
       }
 
       // maybe there are implicit conversions to primitive types
-      Type newLhs = CG.GetImplicitConversionToNumeric(lhs), newRhs = CG.GetImplicitConversionToNumeric(rhs);
+      ITypeInfo newLhs = CG.GetImplicitConversionToNumeric(lhs), newRhs = CG.GetImplicitConversionToNumeric(rhs);
       if(newLhs != null && newRhs != null)
       {
         type = GetTypeForPrimitiveNumerics(newLhs, newRhs);
       }
       else
       {
-        type = typeof(object); // as a last resort we'll invoke the runtime function
+        type = TypeWrapper.Object; // as a last resort we'll invoke the runtime function, which return an Object
       }
     }
     
@@ -404,10 +401,10 @@ public abstract class ArithmeticOperator : NaryOperator
   
   readonly string opOverload;
 
-  static Type GetTypeForPrimitiveNumerics(Type lhs, Type rhs)
+  static ITypeInfo GetTypeForPrimitiveNumerics(ITypeInfo lhs, ITypeInfo rhs)
   {
-    Type type;
-    TypeCode ltc = Type.GetTypeCode(lhs), rtc = Type.GetTypeCode(rhs);
+    ITypeInfo type;
+    TypeCode ltc = lhs.TypeCode, rtc = rhs.TypeCode;
 
     // if both have the same sign or one is larger than the other, or either is floating point...
     if(CG.IsSigned(ltc) == CG.IsSigned(rtc) || CG.SizeOfPrimitiveNumeric(ltc) != CG.SizeOfPrimitiveNumeric(rtc) ||
@@ -421,7 +418,7 @@ public abstract class ArithmeticOperator : NaryOperator
       int index = Math.Min(left, right);
       if(index == int.MaxValue) // undefined numeric conversions become int
       {
-        type = typeof(int);
+        type = TypeWrapper.Int;
       }
       else
       {
@@ -433,24 +430,24 @@ public abstract class ArithmeticOperator : NaryOperator
       int size = CG.SizeOfPrimitiveNumeric(ltc);
       if(size == 8) // ulong+long promotes to Integer
       {
-        type = typeof(Integer);
+        type = TypeWrapper.Integer;
       }
-      else if(size == 4) // uint+int promotes to ulong
+      else if(size == 4) // uint+int promotes to long
       {
-        type = typeof(long);
+        type = TypeWrapper.Long;
       }
       else // all others promote to int
       {
-        type = typeof(int);
+        type = TypeWrapper.Int;
       }
     }
     
     return type;
   }
 
-  static readonly Type[] eqSignPromotions =
+  static readonly ITypeInfo[] eqSignPromotions =
   {
-    typeof(double), typeof(float), typeof(ulong), typeof(long), typeof(uint)
+    TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.ULong, TypeWrapper.Long, TypeWrapper.UInt
   };
 }
 #endregion

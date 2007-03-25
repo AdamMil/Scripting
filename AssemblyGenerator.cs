@@ -87,7 +87,7 @@ public sealed class AssemblyGenerator
   /// <summary>Defines a new public type in the assembly.</summary>
   public TypeGenerator DefineType(string name, Type baseType)
   {
-    return DefineType(name, baseType == null ? null : new TypeWrapper(baseType));
+    return DefineType(name, baseType == null ? null : TypeWrapper.Get(baseType));
   }
 
   /// <summary>Defines a new public type in the assembly.</summary>
@@ -105,7 +105,7 @@ public sealed class AssemblyGenerator
   /// <summary>Defines a new type in the assembly.</summary>
   public TypeGenerator DefineType(TypeAttributes attributes, string name, Type baseType)
   {
-    return DefineType(attributes, name, baseType == null ? null : new TypeWrapper(baseType));
+    return DefineType(attributes, name, baseType == null ? null : TypeWrapper.Get(baseType));
   }
 
   /// <summary>Defines a new type in the assembly.</summary>
@@ -143,7 +143,7 @@ public sealed class AssemblyGenerator
       privates.PrivateClass = tg; // we'll use the snippet itself as the private class
 
       CodeGenerator cg = tg.DefineMethodOverride("Run");
-      cg.EmitTypedNode(body, typeof(object));
+      cg.EmitTypedNode(body, TypeWrapper.Object);
       cg.Finish();
 
       foreach(TypeGenerator type in privates.Types) type.FinishType();

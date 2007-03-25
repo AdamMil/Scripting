@@ -13,7 +13,6 @@ public interface ICallable
 {
   int MinArgs { get; }
   int MaxArgs { get; }
-  bool NeedsFreshArgs { get; }
 
   object Call(params object[] args);
 }
@@ -161,80 +160,6 @@ public sealed class BindingDictionary
 }
 #endregion
 
-#region DynamicMethodClosure
-delegate object DynamicMethodDelegate(DynamicMethodEnvironment env, params object[] args);
-
-sealed class DynamicMethodClosure : Function
-{ 
-  public DynamicMethodClosure(DynamicMethod method, FunctionTemplate template, Binding[] bindings, object[] constants)
-  {
-    Delegate  = (DynamicMethodDelegate)method.CreateDelegate(typeof(DynamicMethodDelegate), this);
-    Template  = template;
-    Bindings  = bindings;
-    Constants = constants;
-  }
-
-  // the delegate of the new closure still references this object as its instance, but since the delegate only
-  // needs to access Bindings and Constants, which are readonly, it's okay.
-  public DynamicMethodClosure Clone(DynamicMethodEnvironment env, object[] defaultParameterValues)
-  {
-    DynamicMethodClosure closure = (DynamicMethodClosure)MemberwiseClone();
-    closure.Environment = env;
-    closure.DefaultParameterValues = defaultParameterValues;
-    return closure;
-  }
-
-  public override object Call(params object[] args)
-  {
-    TopLevel oldTop = TopLevel.Current;
-    try
-    {
-      TopLevel.Current = Template.TopLevel;
-      return Delegate(Environment, Template.MakeArguments(args, DefaultParameterValues));
-    }
-    finally
-    {
-      TopLevel.Current = oldTop;
-    }
-  }
-
-  public override object Call(object[] positionalArgs, string[] keywords, object[] keywordValues)
-  {
-    TopLevel oldTop = TopLevel.Current;
-    try
-    {
-      TopLevel.Current = Template.TopLevel;
-      return Delegate(Environment,
-                      Template.MakeArguments(positionalArgs, DefaultParameterValues, keywords, keywordValues));
-    }
-    finally
-    {
-      TopLevel.Current = oldTop;
-    }
-  }
-
-  readonly DynamicMethodDelegate Delegate;
-  readonly Binding[] Bindings;
-  readonly object[] Constants;
-  DynamicMethodEnvironment Environment;
-  object[] DefaultParameterValues;
-}
-#endregion
-
-#region DynamicMethodEnvironment
-sealed class DynamicMethodEnvironment
-{
-  public DynamicMethodEnvironment(DynamicMethodEnvironment parent, object[] values)
-  {
-    Parent        = parent;
-    ClosureValues = values;
-  }
-
-  public readonly DynamicMethodEnvironment Parent;
-  public readonly object[] ClosureValues;
-}
-#endregion
-
 #region Function
 public abstract class Function : ICallableWithKeywords
 {
@@ -248,11 +173,6 @@ public abstract class Function : ICallableWithKeywords
     get { return Template.HasListParameter ? -1 : Template.ParameterCount; }
   }
   
-  public bool NeedsFreshArgs
-  {
-    get { return Template.HasArgumentClosure; }
-  }
-
   public abstract object Call(params object[] args);
   public abstract object Call(object[] positionalArgs, string[] keywords, object[] keywordValues);
 
@@ -269,7 +189,7 @@ public abstract class Function : ICallableWithKeywords
 public class FunctionTemplate
 {
   public FunctionTemplate(IntPtr funcPtr, string name, string[] parameterNames, Type[] parameterTypes, int numRequired,
-                          bool hasListParam, bool hasDictParam, bool hasArgClosure)
+                          bool hasListParam, bool hasDictParam)
   {
     TopLevel                = TopLevel.Current;
     Function                = funcPtr;
@@ -280,14 +200,13 @@ public class FunctionTemplate
     RequiredParameterCount  = numRequired;
     HasListParameter        = hasListParam;
     HasDictParameter        = hasDictParam;
-    HasArgumentClosure      = hasArgClosure;
   }
 
   public readonly TopLevel TopLevel;
   public readonly string Name;
   public readonly IntPtr Function;
   public readonly int ParameterCount, RequiredParameterCount;
-  public readonly bool HasListParameter, HasDictParameter, HasArgumentClosure;
+  public readonly bool HasListParameter, HasDictParameter;
 
   /// <summary>Gets the name of the given parameter.</summary>
   public string GetParameterName(int index)
@@ -574,11 +493,11 @@ public sealed class RG
       tg.MarkAsNonUserCode();
 
       FieldSlot defaultValues = tg.DefineField(FieldAttributes.Private|FieldAttributes.InitOnly,
-                                               "defaultValues", typeof(object[]));
-      FieldSlot template = new FieldSlot(new ThisSlot(tg.TypeBuilder), typeof(Function).GetField("Template"));
+                                               "defaultValues", TypeWrapper.ObjectArray);
+      FieldSlot template = new FieldSlot(new ThisSlot(tg), TypeWrapper.Get(typeof(Function)).GetField("Template"));
 
       #region Constructor(FunctionTemplate)
-      cg = tg.DefineConstructor(new Type[] { typeof(FunctionTemplate) });
+      cg = tg.DefineConstructor(TypeWrapper.Get(typeof(FunctionWrapper)));
       cg.EmitThis(); // this.Template = template
       cg.EmitArgGet(0);
       cg.EmitFieldSet(typeof(Function), "Template");
@@ -587,7 +506,7 @@ public sealed class RG
       #endregion
 
       #region Constructor(FunctionTemplate, object[])
-      cg = tg.DefineConstructor(new Type[] { typeof(FunctionTemplate), typeof(object[]) });
+      cg = tg.DefineConstructor(TypeWrapper.Get(typeof(FunctionTemplate)), TypeWrapper.ObjectArray);
       cg.EmitThis(); // this.Template = template
       cg.EmitArgGet(0);
       cg.EmitFieldSet(typeof(Function), "Template");
@@ -599,8 +518,8 @@ public sealed class RG
       #endregion
 
       #region Call(object[])
-      cg = tg.DefineMethodOverride("Call", true, typeof(object[]));
-      Slot oldTop = cg.AllocLocalTemp(typeof(TopLevel));
+      cg = tg.DefineMethodOverride("Call", true, TypeWrapper.ObjectArray);
+      Slot oldTop = cg.AllocLocalTemp(TypeWrapper.TopLevel);
       cg.EmitFieldGet(typeof(TopLevel), "Current");     // TopLevel oldTop = TopLevel.Current;
       oldTop.EmitSet(cg);
 
@@ -630,8 +549,9 @@ public sealed class RG
       #endregion
 
       #region Call(object[], string[], object[])
-      cg = tg.DefineMethodOverride("Call", true, typeof(object[]), typeof(string[]), typeof(object[]));
-      oldTop = cg.AllocLocalTemp(typeof(TopLevel));
+      cg = tg.DefineMethodOverride("Call", true, TypeWrapper.ObjectArray,
+                                   TypeWrapper.Get(typeof(string[])), TypeWrapper.ObjectArray);
+      oldTop = cg.AllocLocalTemp(TypeWrapper.TopLevel);
       cg.EmitFieldGet(typeof(TopLevel), "Current");     // TopLevel oldTop = TopLevel.Current;
       oldTop.EmitSet(cg);
 
