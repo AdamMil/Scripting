@@ -149,7 +149,7 @@ public struct Complex
     }
     else if(z.Real == 0 && z.Imaginary == 0)
     {
-      if(power.Imaginary != 0 || power.Real < 0) throw new DivideByZeroException("Complex Pow(): division by zero");
+      if(power.Real < 0) throw new ArgumentOutOfRangeException("Pow(): Power cannot be negative.");
       real = imag = 0;
     }
     else
