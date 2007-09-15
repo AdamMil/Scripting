@@ -593,6 +593,8 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
   {
     return i.length == 0 ? new Integer(0xffffffff) : new Integer(1, BitNegate(i.data, i.length));
   }
+  public static Integer operator++(Integer i) { return i+1; }
+  public static Integer operator--(Integer i) { return i-1; }
   #endregion
 
   #region Bitwise And

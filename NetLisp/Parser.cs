@@ -83,17 +83,12 @@ public class Parser : ParserBase
                 ret = ParseBody();
                 break;
               
-              case "lambda": // (lambda params form ...) where params is a symbol or a possibly-dotted list of symbols
+              case "lambda": // (lambda (.returns type)? params form ...) where params is a symbol or a possibly-dotted list of symbols
               {
                 NextToken();
-                bool hasList;
-                ParameterNode[] parameters = ParameterNode.GetParameters(ParseLambdaList(out hasList));
-                if(hasList)
-                {
-                  ParameterNode last = parameters[parameters.Length-1];
-                  parameters[parameters.Length-1] = new ParameterNode(last.Name, LispTypes.Pair, ParameterType.List);
-                }
-                ret = new ScriptFunctionNode(null, parameters, ParseBody());
+                ITypeInfo returnType;
+                ParameterNode[] parameters = ParseLambdaList(out returnType);
+                ret = new ScriptFunctionNode(null, returnType, parameters, ParseBody());
                 break;
               }
 
@@ -112,6 +107,15 @@ public class Parser : ParserBase
               case "vector":
                 NextToken();
                 ret = new VectorNode(ParseNodeList());
+                break;
+              
+              case ".cast":
+                NextToken();
+                ret = new UnsafeCastNode(ParseType(), ParseExpression());
+                break;
+
+              case ".option":
+                ret = ParseOptions();
                 break;
 
               default: // it's a function call with a symbol referencing the function
@@ -291,7 +295,7 @@ public class Parser : ParserBase
         values.Add(null);
         NextToken();
       }
-      else if(TryConsume(TokenType.LParen)) // it's a binding/value pair
+      else if(TryConsume(TokenType.LParen)) // it's a list containing type/name, name/value, or type/name/value
       {
         names.Add(ParseSymbolName());
         values.Add(ParseOne());
@@ -318,6 +322,46 @@ public class Parser : ParserBase
     return ret;
   }
 
+  ASTNode ParseOptions()
+  {
+    FilePosition start = token.Start;
+
+    NextToken();
+    Consume(TokenType.LParen); // start of the options
+    NetLispCompilerState state =
+      (NetLispCompilerState)CompilerState.Current.Language.CreateCompilerState(CompilerState.Current);
+
+    do // for each option
+    {
+      if(TryConsume(TokenType.LParen)) // it's an option/value pair
+      {
+        string optionName = ParseSymbolName();
+        LiteralNode value = ParseOne() as LiteralNode;
+        if(value == null) AddErrorMessage("expected literal option value");
+
+        switch(optionName)
+        {
+          case "checked":
+            if(value.Value is bool) state.Checked = (bool)value.Value;
+            else AddErrorMessage(string.Format("option '{0}' expects boolean value", optionName));
+            break;
+          default:
+            AddErrorMessage(string.Format("unknown option '{0}'", optionName));
+            break;
+        }
+
+        Consume(TokenType.RParen);
+      }
+      else
+      {
+        AddErrorMessage(string.Format("expected '.option' binding, but received '{0}'", token.Type));
+        if(!TokenIs(TokenType.RParen)) NextToken(); // attempt a lame recovery
+      }
+    } while(!TryConsume(TokenType.RParen));
+
+    return new OptionsNode(state, ParseBody());
+  }
+
   ASTNode ParseNextQuoted()
   {
     if(quoted) throw new InvalidOperationException("Quoted structures cannot be nested!");
@@ -337,33 +381,52 @@ public class Parser : ParserBase
     return nodes.ToArray();
   }
 
-  string[] ParseLambdaList(out bool hasList)
+  ParameterNode[] ParseLambdaList(out ITypeInfo returnType)
   {
-    hasList = false;
+    returnType = TypeWrapper.Unknown;
     
-    if(TokenIs(TokenType.Symbol)) // a single symbol that receives a list of arguments
+    retry:
+    if(TryConsume(TokenType.LParen)) // there's either a return type or a list of parameters
     {
-      hasList = true;
-      return new string[] { ParseSymbolName() };
-    }
-    else if(TryConsume(TokenType.LParen)) // a list of symbols
-    {
-      List<string> names = new List<string>();
-      while(!TryConsume(TokenType.RParen))
+      if(returnType == TypeWrapper.Unknown && TokenIs(TokenType.Symbol) && // it's a return type and we don't already
+         (string)token.Value == ".returns")                                // have one, read it and restart the check
       {
-        names.Add(ParseSymbolName());
+        NextToken();
+        returnType = ParseType();
+        Consume(TokenType.RParen);
+        goto retry;
+      }
+
+      // it's a list of parameters
+      List<ParameterNode> parameters = new List<ParameterNode>();
+      bool hasListParam = false;
+      while(!TryConsume(TokenType.RParen) && !hasListParam)
+      {
         if(TryConsume(TokenType.Period)) // a dotted list
         {
-          if(hasList) Unexpected(TokenType.Period);
-          hasList = true;
-          names.Add(ParseSymbolName());
+          parameters.Add(new ParameterNode(ParseSymbolName(), LispTypes.Pair, ParameterType.List));
+          hasListParam = true;
+        }
+        else if(TryConsume(TokenType.LParen)) // a type and name
+        {
+          ITypeInfo valueType = ParseType();
+          parameters.Add(new ParameterNode(ParseSymbolName(), valueType, ParameterType.Normal));
+          Consume(TokenType.RParen);
+        }
+        else // just a name
+        {
+          parameters.Add(new ParameterNode(ParseSymbolName(), ParameterType.Normal));
         }
       }
-      return names.ToArray();
+      return parameters.ToArray();
+    }
+    else if(TokenIs(TokenType.Symbol)) // a single symbol that receives a list of arguments
+    {
+      return new ParameterNode[] { new ParameterNode(ParseSymbolName(), ParameterType.List) };
     }
     else
     {
-      throw SyntaxError(token.Start, "expected lambda parameter list");
+      throw SyntaxError(token.Start, "expected lambda type or parameter list");
     }
   }
 
@@ -373,6 +436,40 @@ public class Parser : ParserBase
     string name = (string)token.Value;
     NextToken();
     return name;
+  }
+
+  ITypeInfo ParseType()
+  {
+    string typeName = ParseSymbolName();
+    switch(typeName)
+    {
+      case "bool": return TypeWrapper.Bool;
+      case "byte": return TypeWrapper.Byte;
+      case "char": return TypeWrapper.Char;
+      case "complex": return TypeWrapper.Complex;
+      case "double": return TypeWrapper.Double;
+      case "function": return TypeWrapper.ICallable;
+      case "int": return TypeWrapper.Int;
+      case "integer": return TypeWrapper.Integer;
+      case "list": return LispTypes.Pair;
+      case "long": return TypeWrapper.Long;
+      case "object": return TypeWrapper.Object;
+      case "sbyte": return TypeWrapper.SByte;
+      case "short": return TypeWrapper.Short;
+      case "string": return TypeWrapper.String;
+      case "float": return TypeWrapper.Single;
+      case "uint": return TypeWrapper.UInt;
+      case "ulong": return TypeWrapper.ULong;
+      case "ushort": return TypeWrapper.UShort;
+      default:
+        Type type = Type.GetType(typeName);
+        if(type == null)
+        {
+          AddErrorMessage(string.Format("use of undeclared type '{0}'", typeName));
+          return TypeWrapper.Object;
+        }
+        return TypeWrapper.Get(type);
+    }
   }
 
   ASTNode ParseSet()

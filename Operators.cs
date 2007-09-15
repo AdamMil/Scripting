@@ -34,10 +34,10 @@ public abstract class Operator
     return Evaluate((IList<ASTNode>)nodes);
   }
 
-  public static readonly UncheckedAddOperator      UncheckedAdd       = new UncheckedAddOperator();
-  public static readonly UncheckedSubtractOperator UncheckedSubtract  = new UncheckedSubtractOperator();
-  public static readonly UncheckedMultiplyOperator UncheckedMultiply  = new UncheckedMultiplyOperator();
-  public static readonly DivideOperator            Divide             = new DivideOperator();
+  public static readonly AddOperator      Add       = new AddOperator();
+  public static readonly SubtractOperator Subtract  = new SubtractOperator();
+  public static readonly MultiplyOperator Multiply  = new MultiplyOperator();
+  public static readonly DivideOperator   Divide    = new DivideOperator();
   
   public static readonly LogicalTruthOperator LogicalTruth = new LogicalTruthOperator();
 }
@@ -82,7 +82,9 @@ public class LogicalTruthOperator : UnaryOperator
     ITypeInfo type = TypeWrapper.Bool;
     node.Emit(cg, ref type);
 
-    if(type != typeof(bool)) // if the node didn't give us a nice friendly boolean, we'll have to call Evaluate()
+    if(type == null) type = TypeWrapper.Bool; // we consider null to be false, and so does the runtime
+
+    if(type != TypeWrapper.Bool) // if the node didn't give us a nice friendly boolean, we'll have to call Evaluate()
     {
       cg.EmitSafeConversion(type, TypeWrapper.Object);
       Slot tmp = cg.AllocLocalTemp(TypeWrapper.Object);
@@ -100,7 +102,7 @@ public class LogicalTruthOperator : UnaryOperator
       }
     }
 
-    cg.EmitRuntimeConversion(type, desiredType);
+    desiredType = type;
   }
 
   public override void EmitThisOperator(CodeGenerator cg)
@@ -150,7 +152,10 @@ public abstract class ArithmeticOperator : NaryOperator
     return value;
   }
 
-  public abstract object Evaluate(object a, object b);
+  public object Evaluate(object a, object b)
+  {
+    return Evaluate(a, b, GetCurrentOptions());
+  }
 
   public sealed override void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref ITypeInfo desiredType)
   {
@@ -217,8 +222,9 @@ public abstract class ArithmeticOperator : NaryOperator
         tmp.EmitGet(cg);
         cg.FreeLocalTemp(tmp);
         cg.EmitTypedNode(nodes[nodeIndex], TypeWrapper.Object);
-        cg.EmitCall(GetType(), "Evaluate", typeof(object), typeof(object));
-        lhs = TypeWrapper.Object;
+        cg.EmitInt((int)GetCurrentOptions());
+        cg.EmitCall(GetType(), "Evaluate", typeof(object), typeof(object), typeof(Options));
+        lhs = TypeWrapper.Unknown;
       }
     }
     
@@ -228,15 +234,31 @@ public abstract class ArithmeticOperator : NaryOperator
   public override ITypeInfo GetValueType(IList<ASTNode> nodes)
   {
     if(nodes.Count == 0) throw new ArgumentException();
-    ITypeInfo type = nodes[0].ValueType;
-    for(int nodeIndex=1; nodeIndex<nodes.Count; nodeIndex++)
+
+    // with promotion enabled, we can never be sure of what type we'll return
+    if(CompilerState.Current.Checked && CompilerState.Current.PromoteOnOverflow)
     {
-      type = GetValueType(type, nodes[nodeIndex].ValueType);
+      return nodes.Count == 1 ? nodes[0].ValueType : TypeWrapper.Unknown;
     }
-    return type;
+    else
+    {
+      ITypeInfo type = nodes[0].ValueType;
+      for(int nodeIndex=1; nodeIndex<nodes.Count; nodeIndex++)
+      {
+        type = GetValueType(type, nodes[nodeIndex].ValueType);
+      }
+      return type;
+    }
+  }
+
+  [Flags]
+  protected enum Options
+  {
+    None=0, Checked=1, Promote=2
   }
 
   protected abstract void EmitOp(CodeGenerator cg, bool signed);
+  protected abstract object Evaluate(object a, object b, Options options);
 
   protected bool NormalizeTypesOrCallOverload(ref object a, ref object b, out object value)
   {
@@ -392,7 +414,7 @@ public abstract class ArithmeticOperator : NaryOperator
       }
       else
       {
-        type = TypeWrapper.Object; // as a last resort we'll invoke the runtime function, which return an Object
+        type = TypeWrapper.Unknown; // as a last resort we'll invoke the runtime function, which returns an unknown type
       }
     }
     
@@ -400,6 +422,17 @@ public abstract class ArithmeticOperator : NaryOperator
   }
   
   readonly string opOverload;
+
+  static Options GetCurrentOptions()
+  {
+    Options options = Options.None;
+    if(CompilerState.Current.Checked)
+    {
+      options |= Options.Checked;
+      if(CompilerState.Current.PromoteOnOverflow) options |= Options.Promote;
+    }
+    return options;
+  }
 
   static ITypeInfo GetTypeForPrimitiveNumerics(ITypeInfo lhs, ITypeInfo rhs)
   {
@@ -452,119 +485,218 @@ public abstract class ArithmeticOperator : NaryOperator
 }
 #endregion
 
-#region UncheckedAddOperator
-public class UncheckedAddOperator : ArithmeticOperator
+#region AddOperator
+public class AddOperator : ArithmeticOperator
 {
-  internal UncheckedAddOperator() : base("add", "op_Addition") { }
+  internal AddOperator() : base("add", "op_Addition") { }
 
   public override void EmitThisOperator(CodeGenerator cg)
   {
-    cg.EmitFieldGet(typeof(Operator), "UncheckedAdd");
-  }
-
-  public override object Evaluate(object a, object b)
-  {
-    object ret;
-    if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
-
-    switch(Convert.GetTypeCode(a))
-    {
-      case TypeCode.Byte: return (byte)a + (byte)b;
-      case TypeCode.Double: return (double)a + (double)b;
-      case TypeCode.Int16: return (short)a + (short)b;
-      case TypeCode.Int32: return (int)a + (int)b;
-      case TypeCode.Int64: return (long)a + (long)b;
-      case TypeCode.SByte: return (sbyte)a + (sbyte)b;
-      case TypeCode.Single: return (float)a + (float)b;
-      case TypeCode.UInt16: return (ushort)a + (ushort)b;
-      case TypeCode.UInt32: return (uint)a + (uint)b;
-      case TypeCode.UInt64: return (ulong)a + (ulong)b;
-    }
-
-    throw NoOperation(a, b);
+    cg.EmitFieldGet(typeof(Operator), "Add");
   }
 
   protected override void EmitOp(CodeGenerator cg, bool signed)
   {
-    cg.ILG.Emit(OpCodes.Add);
-  }
-}
-#endregion
-
-#region UncheckedSubtractOperator
-public class UncheckedSubtractOperator : ArithmeticOperator
-{
-  internal UncheckedSubtractOperator() : base("subtract", "op_Subtraction") { }
-
-  public override void EmitThisOperator(CodeGenerator cg)
-  {
-    cg.EmitFieldGet(typeof(Operator), "UncheckedSubtract");
+    cg.ILG.Emit(CompilerState.Current.Checked ? signed ? OpCodes.Add_Ovf : OpCodes.Add_Ovf_Un : OpCodes.Add);
   }
 
-  public override object Evaluate(object a, object b)
+  protected override object Evaluate(object a, object b, Options options)
   {
     object ret;
     if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
 
-    switch(Convert.GetTypeCode(a))
+    TypeCode typeCode = Convert.GetTypeCode(a);
+    if((options & Options.Checked) == 0) // unchecked
     {
-      case TypeCode.Byte: return (byte)a - (byte)b;
-      case TypeCode.Double: return (double)a - (double)b;
-      case TypeCode.Int16: return (short)a - (short)b;
-      case TypeCode.Int32: return (int)a - (int)b;
-      case TypeCode.Int64: return (long)a - (long)b;
-      case TypeCode.SByte: return (sbyte)a - (sbyte)b;
-      case TypeCode.Single: return (float)a - (float)b;
-      case TypeCode.UInt16: return (ushort)a - (ushort)b;
-      case TypeCode.UInt32: return (uint)a - (uint)b;
-      case TypeCode.UInt64: return (ulong)a - (ulong)b;
+      unchecked
+      {
+        switch(typeCode)
+        {
+          case TypeCode.Double: return (double)a + (double)b;
+          case TypeCode.Int32: return (int)a + (int)b;
+          case TypeCode.Int64: return (long)a + (long)b;
+          case TypeCode.Single: return (float)a + (float)b;
+          case TypeCode.UInt32: return (uint)a + (uint)b;
+          case TypeCode.UInt64: return (ulong)a + (ulong)b;
+        }
+      }
+    }
+    else // checked
+    {
+      try
+      {
+        checked
+        {
+          switch(typeCode)
+          {
+            case TypeCode.Double: return (double)a + (double)b;
+            case TypeCode.Int32: return (int)a + (int)b;
+            case TypeCode.Int64: return (long)a + (long)b;
+            case TypeCode.Single: return (float)a + (float)b;
+            case TypeCode.UInt32: return (uint)a + (uint)b;
+            case TypeCode.UInt64: return (ulong)a + (ulong)b;
+          }
+        }
+      }
+      catch(OverflowException)
+      {
+        if((options & Options.Promote) == 0) throw; // no promotion, so just let the exception go
+
+        switch(typeCode) // only integer types can overflow
+        {
+          case TypeCode.Int32: return (long)(int)a + (int)b;
+          case TypeCode.Int64: return new Integer((long)a) + (long)b;
+          case TypeCode.UInt32: return (ulong)(uint)a + (uint)b;
+          case TypeCode.UInt64: return new Integer((ulong)a) + (ulong)b;
+        }
+      }
     }
 
     throw NoOperation(a, b);
+  }
+}
+#endregion
+
+#region SubtractOperator
+public class SubtractOperator : ArithmeticOperator
+{
+  internal SubtractOperator() : base("subtract", "op_Subtraction") { }
+
+  public override void EmitThisOperator(CodeGenerator cg)
+  {
+    cg.EmitFieldGet(typeof(Operator), "Subtract");
   }
 
   protected override void EmitOp(CodeGenerator cg, bool signed)
   {
     cg.ILG.Emit(OpCodes.Sub);
   }
-}
-#endregion
 
-#region UncheckedMultiplyOperator
-public class UncheckedMultiplyOperator : ArithmeticOperator
-{
-  internal UncheckedMultiplyOperator() : base("multiply", "op_Multiply") { }
-
-  public override void EmitThisOperator(CodeGenerator cg)
-  {
-    cg.EmitFieldGet(typeof(Operator), "UncheckedMultiply");
-  }
-
-  public override object Evaluate(object a, object b)
+  protected override object Evaluate(object a, object b, Options options)
   {
     object ret;
     if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
 
-    switch(Convert.GetTypeCode(a))
+    TypeCode typeCode = Convert.GetTypeCode(a);
+    if((options & Options.Checked) == 0) // unchecked
     {
-      case TypeCode.Byte: return (byte)a * (byte)b;
-      case TypeCode.Double: return (double)a * (double)b;
-      case TypeCode.Int16: return (short)a * (short)b;
-      case TypeCode.Int32: return (int)a * (int)b;
-      case TypeCode.Int64: return (long)a * (long)b;
-      case TypeCode.SByte: return (sbyte)a * (sbyte)b;
-      case TypeCode.Single: return (float)a * (float)b;
-      case TypeCode.UInt16: return (ushort)a * (ushort)b;
-      case TypeCode.UInt32: return (uint)a * (uint)b;
-      case TypeCode.UInt64: return (ulong)a * (ulong)b;
+      unchecked
+      {
+        switch(typeCode)
+        {
+          case TypeCode.Double: return (double)a - (double)b;
+          case TypeCode.Int32: return (int)a - (int)b;
+          case TypeCode.Int64: return (long)a - (long)b;
+          case TypeCode.Single: return (float)a - (float)b;
+          case TypeCode.UInt32: return (uint)a - (uint)b;
+          case TypeCode.UInt64: return (ulong)a - (ulong)b;
+        }
+      }
+    }
+    else // checked
+    {
+      try
+      {
+        checked
+        {
+          switch(typeCode)
+          {
+            case TypeCode.Double: return (double)a - (double)b;
+            case TypeCode.Int32: return (int)a - (int)b;
+            case TypeCode.Int64: return (long)a - (long)b;
+            case TypeCode.Single: return (float)a - (float)b;
+            case TypeCode.UInt32: return (uint)a - (uint)b;
+            case TypeCode.UInt64: return (ulong)a - (ulong)b;
+          }
+        }
+      }
+      catch(OverflowException)
+      {
+        if((options & Options.Promote) == 0) throw; // no promotion, so just let the exception go
+
+        switch(typeCode) // only integer types can underflow
+        {
+          case TypeCode.Int32: return (long)(int)a - (int)b;
+          case TypeCode.Int64: return new Integer((long)a) - (long)b;
+          case TypeCode.UInt32: return (ulong)(uint)a - (uint)b;
+          case TypeCode.UInt64: return new Integer((ulong)a) - (ulong)b;
+        }
+      }
     }
 
     throw NoOperation(a, b);
   }
+}
+#endregion
+
+#region MultiplyOperator
+public class MultiplyOperator : ArithmeticOperator
+{
+  internal MultiplyOperator() : base("multiply", "op_Multiply") { }
+
+  public override void EmitThisOperator(CodeGenerator cg)
+  {
+    cg.EmitFieldGet(typeof(Operator), "Multiply");
+  }
 
   protected override void EmitOp(CodeGenerator cg, bool signed)
   {
-    cg.ILG.Emit(OpCodes.Mul);
+    cg.ILG.Emit(CompilerState.Current.Checked ? signed ? OpCodes.Mul_Ovf : OpCodes.Mul_Ovf_Un : OpCodes.Mul);
+  }
+
+  protected override object Evaluate(object a, object b, Options options)
+  {
+    object ret;
+    if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
+
+    TypeCode typeCode = Convert.GetTypeCode(a);
+    if((options & Options.Checked) == 0) // unchecked
+    {
+      unchecked
+      {
+        switch(typeCode)
+        {
+          case TypeCode.Double: return (double)a * (double)b;
+          case TypeCode.Int32: return (int)a * (int)b;
+          case TypeCode.Int64: return (long)a * (long)b;
+          case TypeCode.Single: return (float)a * (float)b;
+          case TypeCode.UInt32: return (uint)a * (uint)b;
+          case TypeCode.UInt64: return (ulong)a * (ulong)b;
+        }
+      }
+    }
+    else // checked
+    {
+      try
+      {
+        checked
+        {
+          switch(typeCode)
+          {
+            case TypeCode.Double: return (double)a * (double)b;
+            case TypeCode.Int32: return (int)a * (int)b;
+            case TypeCode.Int64: return (long)a * (long)b;
+            case TypeCode.Single: return (float)a * (float)b;
+            case TypeCode.UInt32: return (uint)a * (uint)b;
+            case TypeCode.UInt64: return (ulong)a * (ulong)b;
+          }
+        }
+      }
+      catch(OverflowException)
+      {
+        if((options & Options.Promote) == 0) throw; // no promotion, so just let the exception go
+
+        switch(typeCode) // only integer types can overflow
+        {
+          case TypeCode.Int32: return (long)(int)a * (int)b;
+          case TypeCode.Int64: return new Integer((long)a) * (long)b;
+          case TypeCode.UInt32: return (ulong)(uint)a * (uint)b;
+          case TypeCode.UInt64: return new Integer((ulong)a) * (ulong)b;
+        }
+      }
+    }
+
+    throw NoOperation(a, b);
   }
 }
 #endregion
@@ -579,7 +711,12 @@ public class DivideOperator : ArithmeticOperator
     cg.EmitFieldGet(typeof(Operator), "Divide");
   }
 
-  public override object Evaluate(object a, object b)
+  protected override void EmitOp(CodeGenerator cg, bool signed)
+  {
+    cg.ILG.Emit(signed ? OpCodes.Div : OpCodes.Div_Un);
+  }
+
+  protected override object Evaluate(object a, object b, Options options)
   {
     object ret;
     if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
@@ -599,11 +736,6 @@ public class DivideOperator : ArithmeticOperator
     }
 
     throw NoOperation(a, b);
-  }
-
-  protected override void EmitOp(CodeGenerator cg, bool signed)
-  {
-    cg.ILG.Emit(signed ? OpCodes.Div : OpCodes.Div_Un);
   }
 }
 #endregion

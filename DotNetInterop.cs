@@ -59,6 +59,7 @@ public static class DotNetInterop
     #endregion
     
     MethodInfo checkArity = null;
+    // TODO: move CheckArity into a base class so we don't duplicate all this code for each wrapper
     #region CheckArity
     if(minArgs != 0 || maxArgs != -1) // if the argument counts aren't unlimited, emit a function to check the arity
     {

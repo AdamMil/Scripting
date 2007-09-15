@@ -329,115 +329,22 @@ public sealed class CallNode : ASTNode
 
   public override ITypeInfo ValueType
   {
-    get { return TypeWrapper.Object; }
+    get { return TypeWrapper.Unknown; }
   }
 
   public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
-    bool doTailCall = IsTail && desiredType == ValueType;  // TODO: don't emit the tailcall if we're inside a try/catch block
+    bool doTailCall = IsTail && desiredType == ValueType;
     cg.EmitTypedNode(Function, TypeWrapper.ICallable);
     cg.EmitObjectArray(Arguments);
     if(doTailCall) cg.ILG.Emit(OpCodes.Tailcall);
     cg.EmitCall(typeof(ICallable), "Call");
-    if(!doTailCall) cg.EmitRuntimeConversion(ValueType, desiredType);
-    TailReturn(cg);
+    TailReturn(cg, ValueType, ref desiredType);
   }
 
   public override object Evaluate()
   {
     return Ops.ConvertToCallable(Function.Evaluate()).Call(ASTNode.EvaluateNodes(Arguments));
-  }
-}
-#endregion
-
-#region IfNode
-public class IfNode : ASTNode
-{
-  public IfNode(ASTNode condition, ASTNode ifTrue, ASTNode ifFalse) : base(true)
-  {
-    Children.Add(condition);
-    Children.Add(ifTrue);
-    if(ifFalse != null) Children.Add(ifFalse);
-  }
-
-  public ASTNode Condition
-  {
-    get { return Children[0]; }
-    set { Children[0] = value; }
-  }
-  
-  public ASTNode IfTrue
-  {
-    get { return Children[1]; }
-    set { Children[1] = value; }
-  }
-  
-  public ASTNode IfFalse
-  {
-    get { return Children.Count >= 3 ? Children[2] : null; }
-    set
-    {
-      if(value == null && Children.Count >= 3)
-      {
-        Children.RemoveAt(2);
-      }
-      else if(value != null && Children.Count < 3)
-      {
-        Children.Add(value);
-      }
-      else
-      {
-        Children[2] = value;
-      }
-    }
-  }
-
-  public override ITypeInfo ValueType
-  {
-    get { return IfFalse == null ? IfTrue.ValueType : CG.GetCommonBaseType(IfTrue.ValueType, IfFalse.ValueType); }
-  }
-
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
-  {
-    cg.EmitTypedOperator(Operator.LogicalTruth, TypeWrapper.Bool, Condition);
-
-    Label end = cg.ILG.DefineLabel();
-    Label falseLabel = IsVoid(desiredType) && IfFalse == null ? end : cg.ILG.DefineLabel();
-    ITypeInfo valueType = IfFalse == null ? desiredType : ValueType;
-
-    cg.ILG.Emit(OpCodes.Brfalse, falseLabel); // jump to the false branch (or end) if the condition is false
-    cg.EmitTypedNode(IfTrue, valueType);      // emit the true branch
-
-    // emit the false branch
-    if(!IsVoid(desiredType) || IfFalse != null)
-    {
-      cg.ILG.Emit(OpCodes.Br, end);
-      cg.ILG.MarkLabel(falseLabel);
-      if(IfFalse != null)
-      {
-        cg.EmitTypedNode(IfFalse, valueType);
-      }
-      else if(!IsVoid(desiredType))
-      {
-        cg.EmitDefault(valueType);
-      }
-    }
-
-    cg.ILG.MarkLabel(end);
-    cg.EmitRuntimeConversion(valueType, desiredType);
-    TailReturn(cg);
-  }
-
-  public override object Evaluate()
-  {
-    if((bool)Operator.LogicalTruth.Evaluate(Condition.Evaluate()))
-    {
-      return IfTrue.Evaluate();
-    }
-    else
-    {
-      return IfFalse == null ? null : IfFalse.Evaluate();
-    }
   }
 }
 #endregion
@@ -476,31 +383,33 @@ public sealed class ListNode : ASTNode
 
   public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
+    ITypeInfo typeOnStack;
     if(ListItems.Count == 0)
     {
       cg.EmitNull();
-      cg.EmitRuntimeConversion(null, desiredType);
+      typeOnStack = null;
     }
     else if(IsVoid(desiredType))
     {
       cg.EmitVoids(ListItems);
       if(DotItem != null) cg.EmitVoid(DotItem);
+      typeOnStack = TypeWrapper.Void;
     }
     else
     {
       ConstructorInfo cons = typeof(Pair).GetConstructor(new Type[] { typeof(object), typeof(object) });
 
+      // TODO: this method pushes every item into the stack. should we have a less stack-heavy method for long lists?
       foreach(ASTNode node in ListItems) cg.EmitTypedNode(node, TypeWrapper.Object);
 
       if(DotItem == null) cg.EmitNull();
       else cg.EmitTypedNode(DotItem, TypeWrapper.Object);
 
       for(int i=0; i<ListItems.Count; i++) cg.EmitNew(cons);
-
-      cg.EmitRuntimeConversion(LispTypes.Pair, desiredType);
+      typeOnStack = LispTypes.Pair;
     }
     
-    TailReturn(cg);
+    TailReturn(cg, typeOnStack, ref desiredType);
   }
 
   public override object Evaluate()
@@ -691,7 +600,7 @@ public sealed class VectorNode : ASTNode
       cg.EmitArray(Children, GetElementType());
     }
 
-    TailReturn(cg);
+    TailReturn(cg, IsVoid(desiredType) ? desiredType : ValueType, ref desiredType);
   }
 
   public override object Evaluate()

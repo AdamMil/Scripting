@@ -260,7 +260,7 @@ public sealed class MethodBuilderWrapper : MethodInfoWrapper
   {
     return (IParameterInfo[])parameters.Clone();
   }
-  
+
   readonly IParameterInfo[] parameters;
   readonly ITypeInfo declaringType, returnType;
 }
@@ -315,6 +315,11 @@ public class MethodInfoWrapper : IMethodInfo
     return ReflectionWrapperHelper.WrapParameters(method.GetParameters());
   }
 
+  public override string ToString()
+  {
+    return method.ToString();
+  }
+
   protected readonly MethodInfo method;
 }
 #endregion
@@ -353,6 +358,11 @@ public sealed class ParameterInfoWrapper : IParameterInfo
     get { return TypeWrapper.Get(param.ParameterType); }
   }
 
+  public override string ToString()
+  {
+    return param.ToString();
+  }
+
   readonly ParameterInfo param;
 }
 #endregion
@@ -385,6 +395,11 @@ public sealed class ParameterTypeWrapper : IParameterInfo
   public ITypeInfo ParameterType
   {
     get { return type; }
+  }
+
+  public override string ToString()
+  {
+    return name + "(" + type.ToString() + ")";
   }
 
   internal void Define(ParameterAttributes attributes, string name)
@@ -454,6 +469,11 @@ public sealed class PropertyInfoWrapper : IPropertyInfo
   public ITypeInfo PropertyType
   {
     get { return TypeWrapper.Get(property.PropertyType); }
+  }
+
+  public override string ToString()
+  {
+    return property.ToString();
   }
 
   readonly PropertyInfo property;
@@ -578,6 +598,11 @@ public class TypeWrapper : ITypeInfo
     return TypeWrapper.GetArray(this, type.MakeArrayType());
   }
 
+  public override string ToString()
+  {
+    return type.ToString();
+  }
+
   const BindingFlags SearchAll = BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Static|BindingFlags.Instance;
 
   readonly Type type;
@@ -638,14 +663,21 @@ public class TypeWrapper : ITypeInfo
   public static readonly TypeWrapper Integer = Get(typeof(Runtime.Integer));
   public static readonly TypeWrapper Single  = Get(typeof(float));
   public static readonly TypeWrapper Double  = Get(typeof(double));
+  public static readonly TypeWrapper Complex = Get(typeof(Runtime.Complex));
   public static readonly TypeWrapper String  = Get(typeof(string));
   public static readonly TypeWrapper Object  = Get(typeof(object));
   public static readonly TypeWrapper IntPtr  = Get(typeof(IntPtr));
   public static readonly TypeWrapper Void    = Get(typeof(void));
+
+  /// <summary>A type representing variables whose type is not known. Automatic runtime conversion may be applied to
+  /// values of unknown types, but otherwise it behaves like <see cref="Object"/>.
+  /// </summary>
+  public static readonly TypeWrapper Unknown = new TypeWrapper(typeof(object));
+
   public static readonly TypeWrapper ICallable    = Get(typeof(Runtime.ICallable));
   public static readonly TypeWrapper TopLevel     = Get(typeof(Runtime.TopLevel));
   public static readonly TypeWrapper ObjectArray  = Get(typeof(object[]));
-  public static readonly ITypeInfo[] EmptyTypes = new ITypeInfo[0];
+  public static readonly ITypeInfo[] EmptyTypes   = new ITypeInfo[0];
 }
 #endregion
 

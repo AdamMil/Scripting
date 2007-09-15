@@ -59,6 +59,7 @@ public static class CG
   public static ITypeInfo GetCommonBaseType(ITypeInfo a, ITypeInfo b)
   {
     if(a == b) return a; // if they are the same type, return it
+    if(a == TypeWrapper.Unknown || b == TypeWrapper.Unknown) return a; // if either is unknown, the base is unknown
     if(a == null || b == null) return TypeWrapper.Object; // if either is null, return Object
 
     // if either are void, return the other one.
@@ -217,7 +218,7 @@ public static class CG
   {
     if(to == null) throw new ArgumentNullException();
     if(from == to) return true;
-    if(from == null && !to.IsValueType) return true; // null can be converted to reference types
+    if(from == null) return !to.IsValueType; // null can be converted to reference types
     if(!to.IsValueType && to.IsAssignableFrom(from)) return true; // upcasts can be done implicitly
     
     if(IsNumeric(from.DotNetType) && IsNumeric(to.DotNetType))
@@ -886,20 +887,22 @@ public class CodeGenerator
     }
   }
 
-  /// <summary>Emits a constant value converted to the given type.</summary>
+  /// <summary>Emits a constant value converted to the given type if possible.</summary>
   /// <remarks>This method will attempt to do the conversion at compile time if possible.</remarks>
-  public void EmitConstant(object value, ITypeInfo desiredType)
+  public void EmitConstant(object value, ref ITypeInfo desiredType)
   {
     if(desiredType == null) throw new ArgumentNullException();
 
-    if(CanEmitConstant(desiredType.DotNetType)) // if we can emit the desired type as a constant,
-    {                                           // do the conversion at compile time
+    ITypeInfo valueType = CG.GetTypeInfo(value);
+    // do the conversion at compile time if possible
+    if(CanEmitConstant(desiredType.DotNetType) && CG.HasImplicitConversion(valueType, desiredType))
+    {                                           
       EmitConstant(Ops.ConvertTo(value, desiredType.DotNetType));
     }
     else // otherwise, do the conversion at runtime
     {
       EmitConstant(value);
-      EmitSafeConversion(CG.GetTypeInfo(value), desiredType);
+      if(!TryEmitSafeConversion(valueType, desiredType)) desiredType = valueType;
     }
   }
 
@@ -1335,12 +1338,17 @@ public class CodeGenerator
     ILG.Emit(OpCodes.Ret);
   }
 
+  public void EmitRuntimeConversion(ITypeInfo typeOnStack, ITypeInfo destinationType)
+  {
+    EmitRuntimeConversion(typeOnStack, destinationType, CompilerState.Current.Checked);
+  }
+
   /// <summary>Emits code to convert a value from one type to another. If not enough information is available to
   /// perform the conversion safely at compile time, code to perform a runtime conversion will be emitted.
   /// </summary>
-  public void EmitRuntimeConversion(ITypeInfo typeOnStack, ITypeInfo destinationType)
+  public void EmitRuntimeConversion(ITypeInfo typeOnStack, ITypeInfo destinationType, bool checkOverflow)
   {
-    if(!TryEmitSafeConversion(typeOnStack, destinationType, false))
+    if(!TryEmitSafeConversion(typeOnStack, destinationType, checkOverflow))
     {
       EmitSafeConversion(typeOnStack, TypeWrapper.Object);
 
@@ -1389,10 +1397,17 @@ public class CodeGenerator
   /// <summary>Emits code to convert a value from one type to another.</summary>
   public void EmitSafeConversion(ITypeInfo typeOnStack, ITypeInfo destType)
   {
-    EmitSafeConversion(typeOnStack, destType, false);
+    EmitSafeConversion(typeOnStack, destType, CompilerState.Current.Checked);
   }
 
-  /// <summary>Emits code to convert a value from one type to another.</summary>
+  /// <summary>Emits code to convert a value from one type to another. Numeric values will be converted without loss of
+  /// data, but the value may change in the representation of the destination type. For instance, a byte value of 255
+  /// can be converted into a signed byte value without loss, but it will have the value -1. To emit code to ensure
+  /// that the value does not change, pass true for <paramref name="checkOverflow"/>.
+  /// </summary>
+  /// <param name="checkOverflow">If true, overflow will be checked to ensure that the value does not change after
+  /// conversion.
+  /// </param>
   public void EmitSafeConversion(ITypeInfo typeOnStack, ITypeInfo destType, bool checkOverflow)
   {
     if(!TryEmitSafeConversion(typeOnStack, destType, checkOverflow))
@@ -1482,7 +1497,7 @@ public class CodeGenerator
   /// </summary>
   public void EmitUnsafeConversion(ITypeInfo typeOnStack, ITypeInfo destType)
   {
-    EmitUnsafeConversion(typeOnStack, destType, false);
+    EmitUnsafeConversion(typeOnStack, destType, CompilerState.Current.Checked);
   }
 
   /// <summary>Emits code to convert a value from one type to another. This method attempts all the same conversions
@@ -1642,6 +1657,11 @@ public class CodeGenerator
     return closureType;
   }
 
+  public bool TryEmitSafeConversion(ITypeInfo typeOnStack, ITypeInfo destType)
+  {
+    return TryEmitSafeConversion(typeOnStack, destType, CompilerState.Current.Checked);
+  }
+
   public bool TryEmitSafeConversion(ITypeInfo typeOnStack, ITypeInfo destType, bool checkOverflow)
   {
     // the destination type cannot be null, although the source type can.
@@ -1655,7 +1675,7 @@ public class CodeGenerator
     }
 
     // if the value on the stack is null, it can be converted to any non-value type
-    if(typeOnStack == null && !destType.IsValueType) return true;
+    if(typeOnStack == null) return !destType.IsValueType;
 
     // if the destination type is a reference type and it's compatible with the type on the stack...
     if(!destType.IsValueType && destType.IsAssignableFrom(typeOnStack))
@@ -1798,12 +1818,17 @@ public class CodeGenerator
     return false; // give up
   }
 
+  public bool TryEmitUnsafeConversion(ITypeInfo typeOnStack, ITypeInfo destinationType)
+  {
+    return TryEmitUnsafeConversion(typeOnStack, destinationType, CompilerState.Current.Checked);
+  }
+
   public bool TryEmitUnsafeConversion(ITypeInfo typeOnStack, ITypeInfo destinationType, bool checkOverflow)
   {
     if(!TryEmitSafeConversion(typeOnStack, destinationType, checkOverflow))
     {
       // these conversions are not guaranteed to work
-      if(typeOnStack == TypeWrapper.Object && destinationType.IsValueType) // unbox value types
+      if(typeOnStack.DotNetType == typeof(object) && destinationType.IsValueType) // unbox value types
       {
         ILG.Emit(OpCodes.Unbox, destinationType.DotNetType);
         EmitIndirectLoad(destinationType.DotNetType);
