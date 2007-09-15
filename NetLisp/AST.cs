@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
+using Scripting;
 using Scripting.AST;
 using Scripting.Emit;
 using Scripting.Runtime;
@@ -329,22 +330,89 @@ public sealed class CallNode : ASTNode
 
   public override ITypeInfo ValueType
   {
-    get { return TypeWrapper.Unknown; }
+    get
+    {
+      VariableNode functionVar = Function as VariableNode;
+      if(functionVar != null && ShouldInline(functionVar.Name))
+      {
+        return GetBuiltinFunctionType(functionVar.Name);
+      }
+      else
+      {
+        return TypeWrapper.Unknown;
+      }
+    }
   }
 
   public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
   {
-    bool doTailCall = IsTail && desiredType == ValueType;
-    cg.EmitTypedNode(Function, TypeWrapper.ICallable);
-    cg.EmitObjectArray(Arguments);
-    if(doTailCall) cg.ILG.Emit(OpCodes.Tailcall);
-    cg.EmitCall(typeof(ICallable), "Call");
-    TailReturn(cg, ValueType, ref desiredType);
+    VariableNode functionVar = Function as VariableNode;
+    if(functionVar != null && ShouldInline(functionVar.Name))
+    {
+      EmitBuiltinFunction(cg, functionVar.Name, ref desiredType);
+    }
+    else
+    {
+      bool doTailCall = IsTail && desiredType == ValueType;
+      cg.EmitTypedNode(Function, TypeWrapper.ICallable);
+      cg.EmitObjectArray(Arguments);
+      if(doTailCall) cg.ILG.Emit(OpCodes.Tailcall);
+      cg.EmitCall(typeof(ICallable), "Call");
+      TailReturn(cg, ValueType, ref desiredType);
+    }
   }
 
   public override object Evaluate()
   {
     return Ops.ConvertToCallable(Function.Evaluate()).Call(ASTNode.EvaluateNodes(Arguments));
+  }
+
+  void EmitBuiltinFunction(CodeGenerator cg, string name, ref ITypeInfo desiredType)
+  {
+    ITypeInfo type = desiredType;
+    switch(name)
+    {
+      case "+":   Operator.Add.Emit(cg, Arguments, ref type); break;
+      case "-":   Operator.Subtract.Emit(cg, Arguments, ref type); break;
+      case "*":   Operator.Multiply.Emit(cg, Arguments, ref type); break;
+      case "/":   Operator.Divide.Emit(cg, Arguments, ref type); break;
+      case "modulo": Operator.Modulus.Emit(cg, Arguments, ref type); break;
+      default: throw new NotImplementedException();
+    }
+    TailReturn(cg, type, ref desiredType);
+  }
+
+  ITypeInfo GetBuiltinFunctionType(string name)
+  {
+    switch(name)
+    {
+      case "+": return Operator.Add.GetValueType(Arguments);
+      case "-": return Operator.Subtract.GetValueType(Arguments);
+      case "*": return Operator.Multiply.GetValueType(Arguments);
+      case "/": return Operator.Divide.GetValueType(Arguments);
+      case "modulo": return Operator.Add.GetValueType(Arguments);
+      default: throw new NotImplementedException();
+    }
+  }
+
+  static bool IsBuiltinFunction(string name)
+  {
+    switch(name)
+    {
+      case "+": case "-": case "*": case "/": case "modulo": return true;
+      default: return false;
+    }
+  }
+
+  static bool IsOverriddenInThisScope(string name)
+  {
+    return false; // TODO: Implement this
+  }
+
+  static bool ShouldInline(string name)
+  {
+    return ((NetLispCompilerState)CompilerState.Current).OptimisticOperatorInlining &&
+           IsBuiltinFunction(name) && !IsOverriddenInThisScope(name);
   }
 }
 #endregion

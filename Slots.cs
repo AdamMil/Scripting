@@ -846,7 +846,7 @@ public sealed class TopLevelSlot : Slot
   public override void EmitGet(CodeGenerator cg)
   {
     EmitBinding(cg);
-    if(cg.TypeGen.Assembly.IsDebug) cg.EmitCall(typeof(Ops), "CheckBinding"); // TODO: check current compiler options
+    if(CompilerState.Current.Debug) cg.EmitCall(typeof(Ops), "CheckBinding");
     cg.EmitFieldGet(valueField);
     cg.EmitUnsafeConversion(TypeWrapper.Object, type);
   }
@@ -854,7 +854,7 @@ public sealed class TopLevelSlot : Slot
   public override void EmitGetAddr(CodeGenerator cg)
   {
     if(type != typeof(object)) throw new NotSupportedException("Only the address of an Object slot can be retrieved.");
-    if(cg.TypeGen.Assembly.IsDebug) cg.EmitCall(typeof(Ops), "CheckBinding"); // TODO: check current compiler options
+    if(CompilerState.Current.Debug) cg.EmitCall(typeof(Ops), "CheckBinding");
     cg.EmitFieldGetAddr(valueField);
   }
 

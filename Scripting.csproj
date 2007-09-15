@@ -9,6 +9,7 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>Scripting</RootNamespace>
     <AssemblyName>Scripting</AssemblyName>
+    <RunPostBuildEvent>OnBuildSuccess</RunPostBuildEvent>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -44,18 +45,22 @@
     <Compile Include="Ops.cs" />
     <Compile Include="Options.cs" />
     <Compile Include="Parser.cs" />
+    <Compile Include="Rational.cs" />
     <Compile Include="ReflectionWrappers.cs" />
     <Compile Include="Runtime.cs" />
     <Compile Include="Scanner.cs" />
     <Compile Include="Slots.cs" />
     <Compile Include="Stages.cs" />
     <Compile Include="TypeGenerator.cs" />
+    <Compile Include="Utilities.cs" />
+    <AddModules Include="Scripting.LowLevel.netmodule" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="System" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="feats.txt" />
+    <None Include="feats.txt" />
+    <None Include="LowLevel.il" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
@@ -65,4 +70,9 @@
   <Target Name="AfterBuild">
   </Target>
   -->
+  <PropertyGroup>
+    <PreBuildEvent>$(WinDir)\Microsoft.net\Framework\v2.0.50727\ilasm.exe $(ProjectDir)\LowLevel.il /dll /out:$(ProjectDir)\Scripting.LowLevel.netmodule /optimize /quiet</PreBuildEvent>
+    <PostBuildEvent>
+    </PostBuildEvent>
+  </PropertyGroup>
 </Project>
