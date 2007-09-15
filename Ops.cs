@@ -25,6 +25,12 @@ public static class Ops
     catch(OverflowException) { return (ulong)a + (ulong)b; }
   }
 
+  public static object Add(ulong a, ulong b)
+  {
+    try { return checked(a+b); }
+    catch(OverflowException) { return new Integer(a) + b; }
+  }
+
   public static object Multiply(int a, int b)
   {
     try { return checked(a*b); }
@@ -47,12 +53,6 @@ public static class Ops
   {
     try { return checked(a*b); }
     catch(OverflowException) { return new Integer(a) * b; }
-  }
-
-  public static object Add(ulong a, ulong b)
-  {
-    try { return checked(a+b); }
-    catch(OverflowException) { return new Integer(a) + b; }
   }
 
   public static object Subtract(int a, int b)
@@ -83,8 +83,13 @@ public static class Ops
   #region Type conversion
   public static object ConvertTo(object obj, Type type)
   {
-    if(obj == null && !type.IsValueType) return null;
-    if(obj != null && type.IsAssignableFrom(obj.GetType())) return obj;
+    // TODO: FIXME: this should allow all the conversions that EmitRuntimeConversion allows, and do them in the same
+    // way. for instance, converting 1.8 to an int should truncate it, not round it.
+    if(obj == null)
+    {
+      if(!type.IsValueType) return null;
+    }
+    else if(type.IsAssignableFrom(obj.GetType())) return obj;
     return Convert.ChangeType(obj, type);
   }
   #endregion

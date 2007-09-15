@@ -40,6 +40,11 @@ public abstract class Language
     return new CompilerState(this);
   }
 
+  public virtual CompilerState CreateCompilerState(CompilerState currentState)
+  {
+    return new CompilerState(currentState);
+  }
+
   public abstract ASTDecorator CreateDecorator(DecoratorType type);
 
   public abstract IParser CreateParser(IScanner scanner);
@@ -72,7 +77,7 @@ public abstract class Language
   {
     return Name + " language";
   }
-  
+
   ASTNode Parse(IScanner scanner)
   {
     IParser parser = CreateParser(scanner);

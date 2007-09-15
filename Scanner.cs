@@ -221,6 +221,13 @@ public abstract class ScannerBase : IScanner
     AddMessage(new OutputMessage(OutputMessageType.Error, message, sourceName, position));
   }
 
+  /// <summary>Loads the next source data source if there currently is none.</summary>
+  /// <returns>Returns true if a valid source is loaded, and false if no source could be loaded.</returns>
+  protected bool EnsureValidSource()
+  {
+    return HasValidSource ? true : NextSource();
+  }
+
   /// <summary>Loads a data stream, given its source name.</summary>
   protected virtual TextReader LoadSource(string name)
   {

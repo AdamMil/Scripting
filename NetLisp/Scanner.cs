@@ -25,7 +25,7 @@ public class Scanner : ScannerBase
   protected override bool ReadToken(out Token token)
   {
     token = new Token();
-    if(!HasValidSource && !NextSource()) return false; // move to the next data source if necessary
+    if(!EnsureValidSource()) return false; // move to the next data source if necessary
 
     while(true) // while we haven't found a valid token yet
     {
@@ -401,19 +401,21 @@ public class Scanner : ScannerBase
       NextChar();
     }
 
-    if(sb.Length == 1)
+    if(sb[0] == '.' || sb[0] == '-' || sb[0] == '+')
     {
-      char c = sb[0];
-      if(c == '.')
+      if(sb.Length == 1)
       {
-        token.Type = TokenString.Period;
-        return;
-      }
-      else if(c == '-' || c == '+')
-      {
-        token.Value = c.ToString();
-        token.Type  = TokenString.Symbol;
-        return;
+        if(sb[0] == '.')
+        {
+          token.Type = TokenString.Period;
+          return;
+        }
+        else
+        {
+          token.Value = sb.ToString();
+          token.Type  = TokenString.Symbol;
+          return;
+        }
       }
     }
 
@@ -446,13 +448,13 @@ public class Scanner : ScannerBase
     token.Type = TokenString.Literal;
 
     Match m = (radix == 10 ? decNum : radix == 16 ? hexNum : radix == 8 ? octNum : binNum).Match(numString);
-    if(!m.Success)
+    if(!m.Success) // if it not a valid number, then assume it's a symbol
     {
-      AddErrorMessage(token.Start, "invalid number: "+numString);
-      token.Value = 0;
+      token.Value = numString;
+      token.Type  = TokenString.Symbol;
       return;
     }
-    
+
     if(m.Groups["den"].Success) // if the number has a denominator (meaning that it's a fraction)
     {
       if(exact == 'i')
@@ -504,11 +506,26 @@ public class Scanner : ScannerBase
   {
     if(string.IsNullOrEmpty(str)) return 0;
 
-    try { return Convert.ToInt32(str, radix); }
+    bool negative = str[0] == '-';
+    if(negative) str = str.Substring(1); // the .NET number parser doesn't accept negative numbers with non-10 bases
+
+    try
+    {
+      int i = Convert.ToInt32(str, radix);
+      return negative ? -i : i;
+    }
     catch(OverflowException)
     {
-      try { return Convert.ToInt64(str, radix); }
-      catch(OverflowException) { return new Integer(str, radix); }
+      try
+      {
+        long L = Convert.ToInt64(str, radix);
+        return negative ? -L : L;
+      }
+      catch(OverflowException)
+      {
+        Integer I = new Integer(str, radix);
+        return negative ? -I : I;
+      }
     }
   }
   
@@ -557,36 +574,52 @@ public class Scanner : ScannerBase
   }
 
   static readonly Regex binNum =
-    new Regex(@"^(:?(?<num>[+-]?(?:[01]+(?:\.[01]*)?|\.[01]+))(?:e(?<exp>[+-]?(?:[01]+(?:\.[01]*)?|\.[01]+)))?
-                   (?:(?<imag>[+-]?(?:[01]+(?:\.[01]*)?|\.[01]+))(?:e(?<imagexp>[+-]?(?:[01]+(?:\.[01]*)?|\.[01]+)))?i)?
-                   |
-                   (?<num>[+-]?[01]+)/(?<den>[+-]?[01]+)
-                 )$",
-              RegexOptions.Compiled|RegexOptions.IgnoreCase|RegexOptions.IgnorePatternWhitespace|RegexOptions.Singleline);
+    new Regex(@"^(
+                   (?<num>[+-]?([01]+(\.[01]*)?|\.[01]+))
+                   (e(?<exp>[+-]?([01]+(\.[01]*)?|\.[01]+)))?
+                   (((?<imag>[+-]?([01]+(\.[01]*)?|\.[01]+))
+                     (e(?<imagexp>[+-]?([01]+(\.[01]*)?|\.[01]+)))?
+                   )?i)?
+                 |
+                 (?<num>[+-]?[01]+)/(?<den>[+-]?[01]+)
+                )$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace |
+                     RegexOptions.Singleline | RegexOptions.ExplicitCapture);
 
   static readonly Regex octNum =
-    new Regex(@"^(?:(?<num>[+-]?(?:[0-7]+(?:\.[0-7]*)?|\.[0-7]+))(?:e(?<exp>[+-]?(?:[0-7]+(?:\.[0-7]*)?|\.[0-7]+)))?
-                    (?:(?<imag>[+-]?(?:[0-7]+(?:\.[0-7]*)?|\.[0-7]+))(?:e(?<imagexp>[+-]?(?:[0-7]+(?:\.[0-7]*)?|\.[0-7]+)))?i)?
-                    |
-                    (?<num>[+-]?[0-7]+)/(?<den>[+-]?[0-7]+)
-                 )$",
-              RegexOptions.Compiled|RegexOptions.IgnoreCase|RegexOptions.IgnorePatternWhitespace|RegexOptions.Singleline);
+    new Regex(@"^(
+                   (?<num>[+-]?([0-7]+(\.[0-7]*)?|\.[0-7]+))
+                   (e(?<exp>[+-]?([0-7]+(\.[0-7]*)?|\.[0-7]+)))?
+                   (((?<imag>[+-]?([0-7]+(\.[0-7]*)?|\.[0-7]+))
+                     (e(?<imagexp>[+-]?([0-7]+(\.[0-7]*)?|\.[0-7]+)))?
+                   )?i)?
+                 |
+                 (?<num>[+-]?[0-7]+)/(?<den>[+-]?[0-7]+)
+                )$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace |
+                     RegexOptions.Singleline | RegexOptions.ExplicitCapture);
 
   static readonly Regex decNum =
-    new Regex(@"^(?:(?<num>[+-]?(?:\d+(?:\.\d*)?|\.\d+))(?:e(?<exp>[+-]?(?:\d+(?:\.\d*)?|\.\d+)))?
-                    (?:(?<imag>[+-]?(?:\d+(?:\.\d*)?|\.\d+))(?:e(?<imagexp>[+-]?(?:\d+(?:\.\d*)?|\.\d+)))?i)?
-                    |
-                    (?<num>[+-]?\d+)/(?<den>[+-]?\d+)
-                 )$",
-              RegexOptions.Compiled|RegexOptions.IgnoreCase|RegexOptions.IgnorePatternWhitespace|RegexOptions.Singleline);
+    new Regex(@"^(
+                   (?<num>[+-]?(\d+(\.\d*)?|\.\d+))
+                   (e(?<exp>[+-]?(\d+(\.\d*)?|\.\d+)))?
+                   (((?<imag>[+-]?(\d+(\.\d*)?|\.\d+))
+                     (e(?<imagexp>[+-]?(\d+(\.\d*)?|\.\d+)))?
+                   )?i)?
+                 |
+                 (?<num>[+-]?\d+)/(?<den>[+-]?\d+)
+                )$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace |
+                     RegexOptions.Singleline | RegexOptions.ExplicitCapture);
 
   static readonly Regex hexNum =
-    new Regex(@"^(?:(?<num>[+-]?(?:[\da-f]+(?:\.[\da-f]*)?|\.[\da-f]+))(?:e(?<exp>[+-]?(?:[\da-f]+(?:\.[\da-f]*)?|\.[\da-f]+)))?
-                    (?:(?<imag>[+-]?(?:[\da-f]+(?:\.[\da-f]*)?|\.[\da-f]+))(?:e(?<imagexp>[+-]?(?:[\da-f]+(?:\.[\da-f]*)?|\.[\da-f]+)))?i)?
-                    |
-                    (?<num>[+-]?[\da-f]+)/(?<den>[+-]?[\da-f]+)
-                 )$",
-              RegexOptions.Compiled|RegexOptions.IgnoreCase|RegexOptions.IgnorePatternWhitespace|RegexOptions.Singleline);
+    new Regex(@"^(
+                   (?<num>[+-]?([\da-f]+(\.[\da-f]*)?|\.[\da-f]+))
+                   (e(?<exp>[+-]?([\da-f]+(\.[\da-f]*)?|\.[\da-f]+)))?
+                   (((?<imag>[+-]?([\da-f]+(\.[\da-f]*)?|\.[\da-f]+))
+                     (e(?<imagexp>[+-]?([\da-f]+(\.[\da-f]*)?|\.[\da-f]+)))?
+                   )?i)?
+                 |
+                 (?<num>[+-]?[\da-f]+)/(?<den>[+-]?[\da-f]+)
+                )$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace |
+                     RegexOptions.Singleline | RegexOptions.ExplicitCapture);
 }
 
 } // namespace NetLisp.Backend
