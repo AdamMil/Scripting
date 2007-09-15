@@ -464,7 +464,8 @@ public class Scanner : ScannerBase
       }
       else
       {
-        throw new NotImplementedException("exact rationals");
+        token.Value = new Rational(Integer.Parse(m.Groups["num"].Value, radix),
+                                   Integer.Parse(m.Groups["den"].Value, radix));
       }
       return;
     }
@@ -483,10 +484,15 @@ public class Scanner : ScannerBase
                                   Convert.ToDouble(ParseNumber(m.Groups["imag"].Value, m.Groups["imagexp"].Value,
                                                                radix, exact)));
       }
-      return;
     }
-    
-    token.Value = numerator;
+    else if(char.ToLowerInvariant(numString[numString.Length-1]) == 'i') // the regex doesn't think it has an imaginary
+    {                                                                    // part, but it actually does...
+      token.Value = new Complex(0, Convert.ToDouble(numerator));
+    }
+    else
+    {
+      token.Value = numerator;
+    }
   }
 
   static bool IsDelimiter(char c)
@@ -523,61 +529,65 @@ public class Scanner : ScannerBase
       }
       catch(OverflowException)
       {
-        Integer I = new Integer(str, radix);
+        Integer I = Integer.Parse(str, radix);
         return negative ? -I : I;
       }
     }
   }
   
-  static double ParseNumber(string str, int radix)
+  static Rational ParseNumber(string str, int radix)
   {
-    if(radix == 10)
-    {
-      return double.Parse(str);
-    }
-    else
-    {
-      int period = str.IndexOf('.');
-      if(period == -1) return Convert.ToDouble(ParseInteger(str, radix));
-      
-      double whole = Convert.ToDouble(ParseInteger(str.Substring(0, period), radix));
-      double frac  = Convert.ToDouble(ParseInteger(str.Substring(period+1), radix));
-      return whole + frac / Math.Pow(10, Math.Ceiling(Math.Log10(frac)));
-    }
+    int period = str.IndexOf('.');
+    if(period == -1) return new Rational(Integer.Parse(str, radix));
+    string whole = str.Substring(0, period), frac = str.Substring(period+1);
+    return new Rational(Integer.Parse(whole+frac, radix), Integer.Pow(new Integer(10), new Integer(frac.Length)));
   }
   
   static object ParseNumber(string str, string exp, int radix, char exact)
   {
-    double number = ParseNumber(str, radix);
-
-    if(!string.IsNullOrEmpty(exp))
-    {
-      number *= Math.Pow(10, ParseNumber(exp, radix));
+    if(str.IndexOf('.') == -1 && exp.IndexOf('.') == -1 && exact != 'i') // if the number has no fractional part and
+    {                                                                    // this isn't an inexact number, read it as an
+      Integer i = Integer.Parse(str, radix);                             // integer
+      if(!string.IsNullOrEmpty(exp)) i *= Integer.Pow(new Integer(10), Integer.Parse(exp, radix));
+      return ShrinkInteger(i);
     }
-    
-    if(Math.IEEERemainder(number, 1) == 0) // integer
+    else // otherwise, read it as a floating point
     {
-      if(exact == 'i') return number;
-      
-      try { return checked((int)number); }
-      catch(OverflowException)
+      Rational number = ParseNumber(str, radix); // TODO: use rational instead of double for the highest accuracy
+      if(!string.IsNullOrEmpty(exp))
       {
-        try { return checked((long)number); }
-        catch(OverflowException) { return new Integer(number); }
+        Rational exponent = ParseNumber(exp, radix);
+        if(exponent.Denominator != 1) throw new NotImplementedException("rational powers");
+        number *= Integer.Pow(new Integer(10), exponent.Numerator);
+      }
+
+      if(exact != 'e') // if they want an inexact number, convert it to floating point
+      {
+        return number.ToDouble();
+      }
+      else if(number.Numerator == 1) // otherwise, if the number seems to be an integer, convert it to one
+      {
+        return ShrinkInteger(number.Numerator);
+      }
+      else // otherwise, just return the rational
+      {
+        return number;
       }
     }
-    else
-    {
-      if(exact == 'e') throw new NotImplementedException("exact rationals");
-      return number;
-    }
+  }
+
+  static object ShrinkInteger(Integer i)
+  {
+    if(i >= int.MinValue && i <= int.MaxValue) return Integer.ToInt32(i);
+    else if(i >= long.MinValue && i <= long.MaxValue) return Integer.ToInt64(i);
+    else return i;
   }
 
   static readonly Regex binNum =
     new Regex(@"^(
                    (?<num>[+-]?([01]+(\.[01]*)?|\.[01]+))
                    (e(?<exp>[+-]?([01]+(\.[01]*)?|\.[01]+)))?
-                   (((?<imag>[+-]?([01]+(\.[01]*)?|\.[01]+))
+                   (((?<imag>[+-]([01]+(\.[01]*)?|\.[01]+))
                      (e(?<imagexp>[+-]?([01]+(\.[01]*)?|\.[01]+)))?
                    )?i)?
                  |
@@ -589,7 +599,7 @@ public class Scanner : ScannerBase
     new Regex(@"^(
                    (?<num>[+-]?([0-7]+(\.[0-7]*)?|\.[0-7]+))
                    (e(?<exp>[+-]?([0-7]+(\.[0-7]*)?|\.[0-7]+)))?
-                   (((?<imag>[+-]?([0-7]+(\.[0-7]*)?|\.[0-7]+))
+                   (((?<imag>[+-]([0-7]+(\.[0-7]*)?|\.[0-7]+))
                      (e(?<imagexp>[+-]?([0-7]+(\.[0-7]*)?|\.[0-7]+)))?
                    )?i)?
                  |
@@ -601,7 +611,7 @@ public class Scanner : ScannerBase
     new Regex(@"^(
                    (?<num>[+-]?(\d+(\.\d*)?|\.\d+))
                    (e(?<exp>[+-]?(\d+(\.\d*)?|\.\d+)))?
-                   (((?<imag>[+-]?(\d+(\.\d*)?|\.\d+))
+                   (((?<imag>[+-](\d+(\.\d*)?|\.\d+))
                      (e(?<imagexp>[+-]?(\d+(\.\d*)?|\.\d+)))?
                    )?i)?
                  |
@@ -613,7 +623,7 @@ public class Scanner : ScannerBase
     new Regex(@"^(
                    (?<num>[+-]?([\da-f]+(\.[\da-f]*)?|\.[\da-f]+))
                    (e(?<exp>[+-]?([\da-f]+(\.[\da-f]*)?|\.[\da-f]+)))?
-                   (((?<imag>[+-]?([\da-f]+(\.[\da-f]*)?|\.[\da-f]+))
+                   (((?<imag>[+-]([\da-f]+(\.[\da-f]*)?|\.[\da-f]+))
                      (e(?<imagexp>[+-]?([\da-f]+(\.[\da-f]*)?|\.[\da-f]+)))?
                    )?i)?
                  |

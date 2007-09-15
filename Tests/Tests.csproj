@@ -55,5 +55,6 @@
   <ItemGroup>
     <Compile Include="Complex.cs" />
     <Compile Include="Integer.cs" />
+    <Compile Include="Rational.cs" />
   </ItemGroup>
 </Project>

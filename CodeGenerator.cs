@@ -169,13 +169,13 @@ public static class CG
     return new CustomAttributeBuilder(attributeType.GetConstructor(Type.EmptyTypes), Ops.EmptyArray);
   }
 
-  public static ITypeInfo GetImplicitConversionToNumeric(ITypeInfo type)
+  public static ITypeInfo GetImplicitConversionToPrimitiveNumeric(ITypeInfo type)
   {
     IMethodInfo dummy;
-    return GetImplicitConversionToNumeric(type, out dummy);
+    return GetImplicitConversionToPrimitiveNumeric(type, out dummy);
   }
 
-  public static ITypeInfo GetImplicitConversionToNumeric(ITypeInfo type, out IMethodInfo method)
+  public static ITypeInfo GetImplicitConversionToPrimitiveNumeric(ITypeInfo type, out IMethodInfo method)
   {
     method = null;
 
@@ -207,6 +207,13 @@ public static class CG
   public static Type GetType(object obj)
   {
     return obj == null ? null : obj.GetType();
+  }
+
+  public static Type GetTypeWithUnwrapping(object obj)
+  {
+    if(obj == null) return null;
+    ITypeInfo typeInfo = obj as ITypeInfo;
+    return typeInfo == null ? obj.GetType() : typeInfo.DotNetType;
   }
 
   public static ITypeInfo GetTypeInfo(object obj)
@@ -257,7 +264,7 @@ public static class CG
 
   public static bool IsNumeric(Type type)
   {
-    return IsPrimitiveNumeric(type) || type == typeof(decimal) || type == typeof(Integer);
+    return IsPrimitiveNumeric(type) || type == typeof(decimal) || type == typeof(Integer) || type == typeof(Complex);
   }
 
   public static bool IsPrimitiveNumeric(Type type)
@@ -873,6 +880,13 @@ public class CodeGenerator
             EmitConstant((short)i.Sign);
             EmitConstant(i.GetInternalData());
             EmitNew(typeof(Integer), typeof(short), typeof(uint[]));
+          }
+          else if(value is Rational)
+          {
+            Rational r = (Rational)value;
+            EmitConstant(r.Numerator);
+            EmitConstant(r.Denominator);
+            EmitCall(typeof(Rational), "Recreate");
           }
           else if(value is Type)
           {

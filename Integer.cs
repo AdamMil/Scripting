@@ -81,50 +81,6 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     }
   }
 
-  public Integer(string s) : this(s, 10) { }
-
-  public Integer(string str, int radix)
-  {
-    if(str == null) throw new InvalidCastException("Cannot convert null to Integer");
-    if(radix < 2 || radix > 36) throw new ArgumentOutOfRangeException("radix must be from 2 to 36");
-    string charSet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ".Substring(0, radix);
-    
-    int i = 0;
-    bool negative = false;
-
-    while(i<str.Length && char.IsWhiteSpace(str[i])) i++; // skip whitespace
-
-    if(i < str.Length) // check for sign markers
-    {
-      if(str[i]=='-')
-      {
-        negative = true;
-        i++;
-      }
-      else if(str[i]=='+')
-      {
-        i++;
-      }
-    }
-
-    while(i<str.Length && char.IsWhiteSpace(str[i])) i++; // skip more whitespace
-
-    if(i == str.Length || charSet.IndexOf(char.ToUpperInvariant(str[i])) == -1)
-    {
-      throw new FormatException("String does not contain a valid integer");
-    }
-
-    Integer value = Zero;
-    do
-    {
-      value = value*radix + (str[i]>'9' ? str[i]-'A'+10 : str[i]-'0');
-    } while(++i != str.Length && charSet.IndexOf(char.ToUpperInvariant(str[i])) != -1);
-
-    this.sign   = negative ? (short)-value.sign : value.sign;
-    this.data   = value.data;
-    this.length = value.length;
-  }
-
   public Integer(double d)
   {
     if(double.IsInfinity(d)) throw new OverflowException("Cannot convert float infinity to Integer");
@@ -133,7 +89,7 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     double fraction;
     int exponent;
 
-    fraction = Math.Abs(SplitFloat(d, out exponent));
+    fraction = Math.Abs(Utilities.SplitFloat(d, out exponent));
     if(exponent == 0)
     {
       this = Zero;
@@ -143,12 +99,12 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     length = (ushort)((exponent+31)/32);
     data   = new uint[length];
 
-    fraction = MakeFloat(fraction, ((exponent-1)&31)+1);
+    fraction = Utilities.MakeFloat(fraction, ((exponent-1)&31)+1);
     data[length-1] = (uint)fraction;
 
     for(int i=length-2; i>=0 && fraction != 0; i--)
     {
-      fraction = MakeFloat(fraction - (uint)fraction, 32);
+      fraction = Utilities.MakeFloat(fraction - (uint)fraction, 32);
       data[i]  = (uint)fraction;
     }
 
@@ -160,7 +116,7 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     int length = CalculateLength(data);
     if(length > ushort.MaxValue) throw new NotImplementedException("Integer values larger than 2097120 bits.");
 
-    this.sign   = length == 0 ? (short)0 : sign;
+    this.sign   = length == 0 ? (short)0 : sign < 0 ? (short)-1 : (short)1;
     this.data   = data;
     this.length = (ushort)length;
   }
@@ -171,6 +127,9 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     get { return length; }
   }
 
+  /// <summary>Gets a value which will be negative if the integer is negative, positive if the integer is positive, and
+  /// zero if the integer is zero.
+  /// </summary>
   public int Sign
   {
     get { return sign; }
@@ -235,8 +194,108 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     return i.sign == -1 ? -i : i;
   }
 
-  public static Integer Parse(string s) { return new Integer(s, 10); }
-  public static Integer Parse(string s, int radix) { return new Integer(s, radix); }
+  /// <summary>Returns the greatest common factor of <paramref name="a"/> and <paramref name="b" /> as a
+  /// non-negative value.
+  /// </summary>
+  public static Integer GreatestCommonFactor(Integer a, Integer b)
+  {
+    if(a.Sign < 0) a = -a;
+    if(b.Sign < 0) b = -b;
+
+    while(true)
+    {
+      if(b.Length == 0) return a;
+      a %= b;
+      if(a.Length == 0) return b;
+      b %= a;
+    }
+  }
+
+  /// <summary>Returns the least common multiple of <paramref name="a"/> and <paramref name="b"/> as a
+  /// non-negative value.
+  /// </summary>
+  public static Integer LeastCommonMultiple(Integer a, Integer b)
+  {
+    if(a.Length == 0 || b.Length == 0) return Zero;
+    return Abs(a / GreatestCommonFactor(a, b) * b);
+  }
+
+  public static Integer Parse(string str)
+  {
+    return Parse(str, 10);
+  }
+
+  public static Integer Parse(string str, int radix)
+  {
+    if(str == null) throw new ArgumentNullException();
+    if(radix < 2 || radix > 36) throw new ArgumentOutOfRangeException("radix must be from 2 to 36");
+    string charSet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ".Substring(0, radix);
+    
+    int i = 0;
+    bool negative = false;
+
+    while(i<str.Length && char.IsWhiteSpace(str[i])) i++; // skip whitespace
+
+    if(i < str.Length) // check for sign markers
+    {
+      if(str[i]=='-')
+      {
+        negative = true;
+        i++;
+      }
+      else if(str[i]=='+')
+      {
+        i++;
+      }
+    }
+
+    while(i<str.Length && char.IsWhiteSpace(str[i])) i++; // skip more whitespace
+
+    if(i == str.Length || charSet.IndexOf(char.ToUpperInvariant(str[i])) == -1)
+    {
+      throw new FormatException("String does not contain a valid integer");
+    }
+
+    Integer value = Zero;
+    do
+    {
+      value = value*radix + (str[i]>'9' ? str[i]-'A'+10 : str[i]-'0');
+    } while(++i != str.Length && charSet.IndexOf(char.ToUpperInvariant(str[i])) != -1);
+
+    return negative ? -value : value;
+  }
+
+  public static Integer Pow(Integer i, uint power) // TODO: this can be optimized better
+  {
+    if(power == 2) return i.Squared();
+    if(power < 0) throw new ArgumentOutOfRangeException("power", power, "power must be >= 0");
+
+    Integer factor = i;
+    Integer result = One;
+    while(power != 0)
+    {
+      if((power&1) != 0) result *= factor;
+      factor = factor.Squared();
+      power >>= 1;
+    }
+    return result;
+  }
+
+  public static Integer Pow(Integer i, Integer power) // TODO: this can be optimized better
+  {
+    if(power.Sign < 0) throw new ArgumentOutOfRangeException("power", power, "power must be >= 0");
+    if(power <= uint.MaxValue) return Pow(i, Integer.ToUInt32(power));
+
+    Integer factor = i;
+    Integer result = One;
+    while(power != 0)
+    {
+      if((power&1) != 0) result *= factor;
+      factor = factor.Squared();
+      power >>= 1;
+    }
+    return result;
+  }
 
   public static readonly Integer MinusOne = new Integer(-1, new uint[1] { 1 });
   public static readonly Integer One  = new Integer(1, new uint[1] { 1 });
@@ -366,6 +425,8 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
   public static Integer operator+(uint a, Integer b) { return b + a; }
   public static Integer operator+(long a, Integer b) { return new Integer(a) + b; }
   public static Integer operator+(ulong a, Integer b) { return new Integer(a) + b; }
+  public static double operator+(Integer a, double b) { return Integer.ToDouble(a, false) + b; }
+  public static double operator+(double a, Integer b) { return a + Integer.ToDouble(b, false); }
   #endregion
 
   #region Subtraction
@@ -456,6 +517,8 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
 
   public static Integer operator-(long a, Integer b) { return new Integer(a) - b; }
   public static Integer operator-(ulong a, Integer b) { return new Integer(a) - b; }
+  public static double operator-(Integer a, double b) { return Integer.ToDouble(a, false) - b; }
+  public static double operator-(double a, Integer b) { return a - Integer.ToDouble(b, false); }
   #endregion
 
   #region Multiplication
@@ -492,6 +555,8 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
 
   public static Integer operator*(long a, Integer b) { return new Integer(a) * b; }
   public static Integer operator*(ulong a, Integer b) { return new Integer(a) * b; }
+  public static double operator*(Integer a, double b) { return Integer.ToDouble(a, false) * b; }
+  public static double operator*(double a, Integer b) { return a * Integer.ToDouble(b, false); }
   #endregion
 
   #region Division
@@ -538,6 +603,8 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
   public static Integer operator/(uint a, Integer b) { return new Integer(a) / b; }
   public static Integer operator/(long a, Integer b) { return new Integer(a) / b; }
   public static Integer operator/(ulong a, Integer b) { return new Integer(a) / b; }
+  public static double operator/(Integer a, double b) { return Integer.ToDouble(a, false) / b; }
+  public static double operator/(double a, Integer b) { return a / Integer.ToDouble(b, false); }
   #endregion
 
   #region Modulus
@@ -547,18 +614,22 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     if(a.sign == 0) return Zero;
 
     int c = a.AbsCompareTo(b);
-    if(c == 0) return Zero;
+    if(c < 0) return a;
+    else if(c == 0) return Zero;
 
     uint[] remainder;
-    if(c > 0) Divide(a.data, a.length, b.data, b.length, out remainder);
-    else Divide(a.data, a.length, b.data, b.length, out remainder);
-    return new Integer(b.sign, remainder);
+    Divide(a.data, a.length, b.data, b.length, out remainder);
+    return new Integer(a.sign, remainder);
   }
 
   public static Integer operator%(Integer a, int b)
   {
     if(b == 0) throw new DivideByZeroException("Integer modulus by zero");
     if(a.sign == 0) return Zero;
+
+    int c = a.AbsCompareTo(IntToUint(b));
+    if(c < 0) return a;
+    else if(c == 0) return Zero;
 
     uint remainder;
     Divide(a.data, a.length, IntToUint(b), out remainder);
@@ -571,6 +642,10 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
   {
     if(b == 0) throw new DivideByZeroException("Integer modulus by zero");
     if(a.sign == 0) return Zero;
+
+    int c = a.AbsCompareTo(b);
+    if(c < 0) return a;
+    else if(c == 0) return Zero;
 
     uint remainder;
     Divide(a.data, a.length, b, out remainder);
@@ -722,23 +797,14 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
 
   double IConvertible.ToDouble(IFormatProvider provider)
   {
-    if(length == 0) return 0.0;
-
-    double value = 0;
-    for(int i=length-1; i>=0; i--)
-    {
-      value = value*4294967296.0 + data[i];
-    }
-    if(double.IsInfinity(value)) throw new OverflowException();
-    if(sign == -1) value = -value;
-    return value;
+    return ToDouble(true);
   }
 
   DateTime IConvertible.ToDateTime(IFormatProvider provider) { throw new InvalidCastException(); }
 
   float IConvertible.ToSingle(IFormatProvider provider)
   {
-    float value = (float)((IConvertible)this).ToDouble(provider);
+    float value = (float)ToDouble(false);
     if(float.IsInfinity(value)) throw new OverflowException();
     return value;
   }
@@ -804,30 +870,12 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
 
   decimal IConvertible.ToDecimal(IFormatProvider provider)
   {
-    return new decimal(((IConvertible)this).ToDouble(provider));
+    return new decimal(ToDouble(true));
   }
 
   object IConvertible.ToType(Type conversionType, IFormatProvider provider)
   {
-    IConvertible convertible = this;
-    switch(Type.GetTypeCode(conversionType))
-    {
-      case TypeCode.Boolean: return convertible.ToBoolean(provider);
-      case TypeCode.Byte:    return convertible.ToByte(provider);
-      case TypeCode.Char:    return convertible.ToChar(provider);
-      case TypeCode.Decimal: return convertible.ToDecimal(provider);
-      case TypeCode.Double:  return convertible.ToDouble(provider);
-      case TypeCode.Int16:   return convertible.ToInt16(provider);
-      case TypeCode.Int32:   return convertible.ToInt32(provider);
-      case TypeCode.Int64:   return convertible.ToInt64(provider);
-      case TypeCode.SByte:   return convertible.ToSByte(provider);
-      case TypeCode.Single:  return convertible.ToSingle(provider);
-      case TypeCode.String:  return convertible.ToString(provider);
-      case TypeCode.UInt16:  return convertible.ToUInt16(provider);
-      case TypeCode.UInt32:  return convertible.ToUInt32(provider);
-      case TypeCode.UInt64:  return convertible.ToUInt64(provider);
-      default: throw new InvalidCastException();
-    }
+    return Utilities.ToType(this, conversionType, provider);
   }
 
   uint IConvertible.ToUInt32(IFormatProvider provider)
@@ -836,10 +884,29 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     return length == 0 ? 0 : data[0];
   }
 
+  internal double ToDouble(bool throwOnInfinity)
+  {
+    if(length == 0) return 0.0;
+
+    double value = 0;
+    for(int i=length-1; i>=0; i--)
+    {
+      value = value*4294967296.0 + data[i];
+    }
+    if(throwOnInfinity && double.IsInfinity(value)) throw new OverflowException();
+    if(sign == -1) value = -value;
+    return value;
+  }
+
   public static byte ToByte(Integer i) { return ((IConvertible)i).ToByte(null); }
   public static decimal ToDecimal(Integer i) { return ((IConvertible)i).ToDecimal(null); }
-  public static double ToDouble(Integer i) { return ((IConvertible)i).ToDouble(null); }
+  public static double ToDouble(Integer i) { return i.ToDouble(true); }
+  public static double ToDouble(Integer i, bool throwOnInfinity) { return i.ToDouble(throwOnInfinity); }
   public static float ToSingle(Integer i) { return ((IConvertible)i).ToSingle(null); }
+  public static float ToSingle(Integer i, bool throwOnInfinity)
+  {
+    return throwOnInfinity ? ToSingle(i) : (float)i.ToDouble(false);
+  }
   public static short ToInt16(Integer i) { return ((IConvertible)i).ToInt16(null); }
   public static int ToInt32(Integer i) { return ((IConvertible)i).ToInt32(null); }
   public static long ToInt64(Integer i) { return ((IConvertible)i).ToInt64(null); }
@@ -924,28 +991,15 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
       default: return 1;
     }
   }
+
+  public static int Compare(Integer a, Integer b)
+  {
+    return a.CompareTo(b);
+  }
   #endregion
 
   #region ICloneable Members
   public object Clone() { return new Integer(sign, (uint[])data.Clone()); }
-  #endregion
-
-  #region Pow
-  public Integer Pow(uint power) // TODO: this can be optimized better
-  {
-    if(power == 2) return Squared();
-    if(power < 0) throw new ArgumentOutOfRangeException("power", power, "power must be >= 0");
-
-    Integer factor = this;
-    Integer result = One;
-    while(power != 0)
-    {
-      if((power&1) != 0) result *= factor;
-      factor = factor.Squared();
-      power >>= 1;
-    }
-    return result;
-  }
   #endregion
 
   internal uint[] GetInternalData()
@@ -1629,54 +1683,6 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
 
   static int UintCompare(uint a, uint b) { return a>b ? 1 : a<b ? -1 : 0; }
   static int UlongCompare(ulong a, ulong b) { return a>b ? 1 : a<b ? -1 : 0; }
-
-  /// <summary>Splits a floating point value into a fraction and an exponent.</summary>
-  /// <param name="value">The floating point value to split.</param>
-  /// <param name="exponent">The exponent, from 0 to 1024.</param>
-  /// <returns>A double value between -1 and 1 (exclusive).</returns>
-  static unsafe double SplitFloat(double value, out int exponent)
-  {
-    const int expShift = (64-11-1), expBias = 1022;
-    const uint expMask = 0x7FF;
-
-    if(value == 0)
-    {
-      exponent = 0;
-      return 0;
-    }
-
-    ulong ulvalue = *(ulong*)&value;
-    exponent = (int)((uint)(ulvalue >> expShift) & expMask) - expBias;
-    ulvalue = ulvalue & ~((ulong)expMask << expShift) | ((ulong)expBias << expShift);
-    return *(double*)&ulvalue;
-  }
-  
-  /// <summary>Constructs a floating point value given a fraction and an exponent.</summary>
-  /// <param name="fraction">A floating point value between -1 and 1 (exclusive).</param>
-  /// <param name="exponent">An exponent from 0 to 1024.</param>
-  /// <returns>A floating point value equal to fraction * pow(2, exponent).</returns>
-  static unsafe double MakeFloat(double fraction, int exponent)
-  {
-    const int expShift = (64-11-1);
-    const uint expMask = 0x7FF;
-    
-    if(fraction == 0) return 0;
-    
-    ulong ulvalue = *(ulong*)&fraction;
-    exponent += (int)((uint)(ulvalue >> expShift) & expMask);
-
-    if(exponent <= 0)
-    {
-      return 0;
-    }
-    else if(exponent >= expMask)
-    {
-      return fraction < 0 ? double.NegativeInfinity : double.PositiveInfinity;
-    }
-    
-    ulvalue = ulvalue & ~((ulong)expMask << expShift) | ((ulong)exponent << expShift);
-    return *(double*)&ulvalue;
-  }
 }
 
 } // namespace Scripting.Runtime

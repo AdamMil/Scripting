@@ -72,7 +72,7 @@ public sealed class NetLispCompilerState : CompilerState
   /// function call. In contexts where the compiler can prove that an operator has or has not been overridden, this
   /// option has no effect.
   /// </summary>
-  public bool OptimisticOperatorInlining;
+  public bool OptimisticOperatorInlining = true;
 }
 #endregion
 

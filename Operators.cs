@@ -8,12 +8,14 @@ using Scripting.Runtime;
 namespace Scripting.AST
 {
 
+#region Base classes
 #region Operator
 public abstract class Operator
 {
   /// <param name="name">The name displayed to the user in diagnostic messages.</param>
   protected Operator(string name)
   {
+    if(string.IsNullOrEmpty(name)) throw new ArgumentException("Name must not be empty.");
     Name = name;
   }
 
@@ -38,7 +40,12 @@ public abstract class Operator
   public static readonly SubtractOperator Subtract  = new SubtractOperator();
   public static readonly MultiplyOperator Multiply  = new MultiplyOperator();
   public static readonly DivideOperator   Divide    = new DivideOperator();
-  
+  public static readonly ModulusOperator  Modulus   = new ModulusOperator();
+
+  public static readonly BitwiseAndOperator BitwiseAnd = new BitwiseAndOperator();
+  public static readonly BitwiseOrOperator  BitwiseOr  = new BitwiseOrOperator();
+  public static readonly BitwiseXorOperator BitwizeXor = new BitwiseXorOperator();
+
   public static readonly LogicalTruthOperator LogicalTruth = new LogicalTruthOperator();
 }
 #endregion
@@ -72,73 +79,32 @@ public abstract class UnaryOperator : Operator
 }
 #endregion
 
-#region LogicalTruthOperator
-public class LogicalTruthOperator : UnaryOperator
-{
-  public LogicalTruthOperator() : base("truth") { }
-
-  public override void Emit(CodeGenerator cg, ASTNode node, ref ITypeInfo desiredType)
-  {
-    ITypeInfo type = TypeWrapper.Bool;
-    node.Emit(cg, ref type);
-
-    if(type == null) type = TypeWrapper.Bool; // we consider null to be false, and so does the runtime
-
-    if(type != TypeWrapper.Bool) // if the node didn't give us a nice friendly boolean, we'll have to call Evaluate()
-    {
-      cg.EmitSafeConversion(type, TypeWrapper.Object);
-      Slot tmp = cg.AllocLocalTemp(TypeWrapper.Object);
-      tmp.EmitSet(cg);
-      EmitThisOperator(cg);
-      tmp.EmitGet(cg);
-      cg.FreeLocalTemp(tmp);
-      cg.EmitCall(GetType(), "Evaluate", typeof(object));
-      type = TypeWrapper.Object;
-      
-      if(desiredType == TypeWrapper.Bool) // if the desired type is a boolean, we can unbox the object returned by Evaluate
-      {
-        cg.EmitUnsafeConversion(type, desiredType);
-        type = desiredType;
-      }
-    }
-
-    desiredType = type;
-  }
-
-  public override void EmitThisOperator(CodeGenerator cg)
-  {
-    cg.EmitFieldGet(typeof(Operator), "LogicalTruth");
-  }
-
-  public override object Evaluate(object obj)
-  {
-    return obj != null && (!(obj is bool) || (bool)obj); // null and false are false. everything else is true.
-  }
-
-  public override ITypeInfo GetValueType(ASTNode node)
-  {
-    return TypeWrapper.Bool;
-  }
-}
-#endregion
-
+#region NAryOperator
 public abstract class NaryOperator : Operator
 {
   protected NaryOperator(string name) : base(name) { }
 }
+#endregion
 
-#region ArithmeticOperator
-public abstract class ArithmeticOperator : NaryOperator
+#region NumericOperator
+public abstract class NumericOperator : NaryOperator
 {
   /// <param name="opMethod">The name of the method used for operator overloading. For instance, op_Addition.</param>
-  protected ArithmeticOperator(string name, string opOverload) : base(name)
+  protected NumericOperator(string name, string opOverload) : base(name)
   {
-    if(string.IsNullOrEmpty(name) || string.IsNullOrEmpty(opOverload))
-    {
-      throw new ArgumentException("Name and method name must not be empty.");
-    }
-
+    if(string.IsNullOrEmpty(opOverload)) throw new ArgumentException("Method name must not be empty.");
     this.opOverload = opOverload;
+  }
+
+  [Flags]
+  public enum Options
+  {
+    None=0, Checked=1, Promote=2
+  }
+
+  public sealed override void EmitThisOperator(CodeGenerator cg)
+  {
+    cg.EmitFieldGet(typeof(Operator), Name);
   }
 
   public sealed override object Evaluate(IList<ASTNode> nodes)
@@ -157,10 +123,13 @@ public abstract class ArithmeticOperator : NaryOperator
     return Evaluate(a, b, GetCurrentOptions());
   }
 
+  public abstract object Evaluate(object a, object b, Options options);
+
   public sealed override void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref ITypeInfo desiredType)
   {
     if(nodes.Count < 2) throw new ArgumentException();
 
+    bool autoPromote = CompilerState.Current.Checked && CompilerState.Current.PromoteOnOverflow;
     ITypeInfo lhs = nodes[0].ValueType;
     nodes[0].Emit(cg, ref lhs);
 
@@ -172,14 +141,14 @@ public abstract class ArithmeticOperator : NaryOperator
       retry:
       TypeCode ltc = lhs.TypeCode, rtc = rhs.TypeCode;
 
-      if(shouldImplicitlyConvertToNumeric ||
-         CG.IsPrimitiveNumeric(ltc) && CG.IsPrimitiveNumeric(rtc)) // if we're dealing with primitive numeric types
+      if(!autoPromote && (shouldImplicitlyConvertToNumeric ||       // if we're dealing with primitive numeric types
+         CG.IsPrimitiveNumeric(ltc) && CG.IsPrimitiveNumeric(rtc))) // and we don't need to worry about promotion
       {
         ITypeInfo realLhs=lhs, realRhs=rhs; // the real object types that will be converted to numeric
         if(shouldImplicitlyConvertToNumeric)
         {
-          lhs = CG.GetImplicitConversionToNumeric(lhs);
-          rhs = CG.GetImplicitConversionToNumeric(rhs);
+          lhs = CG.GetImplicitConversionToPrimitiveNumeric(lhs);
+          rhs = CG.GetImplicitConversionToPrimitiveNumeric(rhs);
           cg.EmitSafeConversion(realLhs, lhs); // convert the left side if necessary
         }
 
@@ -189,29 +158,34 @@ public abstract class ArithmeticOperator : NaryOperator
         nodes[nodeIndex].Emit(cg, ref realRhs);
         if(shouldImplicitlyConvertToNumeric) cg.EmitSafeConversion(realRhs, rhs); // convert the right side if necessary
         cg.EmitSafeConversion(rhs, type);
-        EmitOp(cg, true);
+        EmitOp(cg, type, true);
         lhs = type;
       }
-      else // at least one type is a non-primitive. check for operator overloading and implicit conversions
+      else // at least one type is a non-primitive, or we need to check for promotion
       {
-        Overload overload = GetOperatorOverload(lhs, rhs);
-        if(overload != null) // if there's an operator overload, use it.
+        // if we got here because a type is non-primitive, then check overloads and implicit conversions...
+        if(!autoPromote && (!CG.IsPrimitiveNumeric(ltc) || !CG.IsPrimitiveNumeric(rtc)))
         {
-          cg.EmitSafeConversion(lhs, overload.LeftParam);
-          cg.EmitTypedNode(nodes[nodeIndex], overload.RightParam);
-          cg.EmitCall(overload.Method);
-          lhs = overload.Method.ReturnType;
-          continue;
-        }
+          Overload overload = GetOperatorOverload(lhs, rhs);
+          if(overload != null) // if there's an operator overload, use it.
+          {
+            cg.EmitSafeConversion(lhs, overload.LeftParam);
+            cg.EmitTypedNode(nodes[nodeIndex], overload.RightParam);
+            cg.EmitCall(overload.Method);
+            lhs = overload.Method.ReturnType;
+            continue;
+          }
 
-        // maybe there are implicit conversions to primitive types
-        ITypeInfo newLhs = CG.GetImplicitConversionToNumeric(lhs), newRhs = CG.GetImplicitConversionToNumeric(rhs);
-        if(newLhs != null && newRhs != null)
-        {
-          // set a flag indicating that we have implicit conversions to numeric and jump to the top of the loop where
-          // we can retry the operation
-          shouldImplicitlyConvertToNumeric = true;
-          goto retry;
+          // maybe there are implicit conversions to primitive types
+          ITypeInfo newLhs = CG.GetImplicitConversionToPrimitiveNumeric(lhs),
+                    newRhs = CG.GetImplicitConversionToPrimitiveNumeric(rhs);
+          if(newLhs != null && newRhs != null)
+          {
+            // set a flag indicating that we have implicit conversions to numeric and jump to the top of the loop where
+            // we can retry the operation
+            shouldImplicitlyConvertToNumeric = true;
+            goto retry;
+          }
         }
 
         // emit a call to the runtime version as a last resort
@@ -251,14 +225,7 @@ public abstract class ArithmeticOperator : NaryOperator
     }
   }
 
-  [Flags]
-  protected enum Options
-  {
-    None=0, Checked=1, Promote=2
-  }
-
-  protected abstract void EmitOp(CodeGenerator cg, bool signed);
-  protected abstract object Evaluate(object a, object b, Options options);
+  protected abstract void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed);
 
   protected bool NormalizeTypesOrCallOverload(ref object a, ref object b, out object value)
   {
@@ -282,7 +249,8 @@ public abstract class ArithmeticOperator : NaryOperator
         return true;
       }
 
-      ITypeInfo newLhs = CG.GetImplicitConversionToNumeric(lhs), newRhs = CG.GetImplicitConversionToNumeric(rhs);
+      ITypeInfo newLhs = CG.GetImplicitConversionToPrimitiveNumeric(lhs),
+                newRhs = CG.GetImplicitConversionToPrimitiveNumeric(rhs);
       if(newLhs != null && newRhs != null)
       {
         Type type = GetTypeForPrimitiveNumerics(newLhs, newRhs).DotNetType;
@@ -298,7 +266,7 @@ public abstract class ArithmeticOperator : NaryOperator
   
   protected Exception NoOperation(object a, object b)
   {
-    return NoOperation(CG.GetType(a), CG.GetType(b));
+    return NoOperation(CG.GetTypeWithUnwrapping(a), CG.GetTypeWithUnwrapping(b));
   }
   
   protected Exception NoOperation(Type a, Type b)
@@ -407,7 +375,8 @@ public abstract class ArithmeticOperator : NaryOperator
       }
 
       // maybe there are implicit conversions to primitive types
-      ITypeInfo newLhs = CG.GetImplicitConversionToNumeric(lhs), newRhs = CG.GetImplicitConversionToNumeric(rhs);
+      ITypeInfo newLhs = CG.GetImplicitConversionToPrimitiveNumeric(lhs),
+                newRhs = CG.GetImplicitConversionToPrimitiveNumeric(rhs);
       if(newLhs != null && newRhs != null)
       {
         type = GetTypeForPrimitiveNumerics(newLhs, newRhs);
@@ -484,23 +453,67 @@ public abstract class ArithmeticOperator : NaryOperator
   };
 }
 #endregion
+#endregion
 
-#region AddOperator
-public class AddOperator : ArithmeticOperator
+#region Unary operators
+#region LogicalTruthOperator
+public sealed class LogicalTruthOperator : UnaryOperator
 {
-  internal AddOperator() : base("add", "op_Addition") { }
+  public LogicalTruthOperator() : base("truth") { }
+
+  public override void Emit(CodeGenerator cg, ASTNode node, ref ITypeInfo desiredType)
+  {
+    ITypeInfo type = TypeWrapper.Bool;
+    node.Emit(cg, ref type);
+
+    if(type == null) type = TypeWrapper.Bool; // we consider null to be false, and so does the runtime
+
+    if(type != TypeWrapper.Bool) // if the node didn't give us a nice friendly boolean, we'll have to call Evaluate()
+    {
+      cg.EmitSafeConversion(type, TypeWrapper.Object);
+      Slot tmp = cg.AllocLocalTemp(TypeWrapper.Object);
+      tmp.EmitSet(cg);
+      EmitThisOperator(cg);
+      tmp.EmitGet(cg);
+      cg.FreeLocalTemp(tmp);
+      cg.EmitCall(GetType(), "Evaluate", typeof(object));
+      type = TypeWrapper.Object;
+      
+      if(desiredType == TypeWrapper.Bool) // if the desired type is a boolean, we can unbox the object returned by Evaluate
+      {
+        cg.EmitUnsafeConversion(type, desiredType);
+        type = desiredType;
+      }
+    }
+
+    desiredType = type;
+  }
 
   public override void EmitThisOperator(CodeGenerator cg)
   {
-    cg.EmitFieldGet(typeof(Operator), "Add");
+    cg.EmitFieldGet(typeof(Operator), "LogicalTruth");
   }
 
-  protected override void EmitOp(CodeGenerator cg, bool signed)
+  public override object Evaluate(object obj)
   {
-    cg.ILG.Emit(CompilerState.Current.Checked ? signed ? OpCodes.Add_Ovf : OpCodes.Add_Ovf_Un : OpCodes.Add);
+    return obj != null && (!(obj is bool) || (bool)obj); // null and false are false. everything else is true.
   }
 
-  protected override object Evaluate(object a, object b, Options options)
+  public override ITypeInfo GetValueType(ASTNode node)
+  {
+    return TypeWrapper.Bool;
+  }
+}
+#endregion
+#endregion
+
+#region Arithmetic operators
+#region AddOperator
+public sealed class AddOperator : NumericOperator
+{
+  internal AddOperator() : base("Add", "op_Addition") { }
+
+  public override object Evaluate(object a, object b, Options options)
   {
     object ret;
     if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
@@ -554,25 +567,20 @@ public class AddOperator : ArithmeticOperator
 
     throw NoOperation(a, b);
   }
+
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  {
+    cg.ILG.Emit(CompilerState.Current.Checked ? signed ? OpCodes.Add_Ovf : OpCodes.Add_Ovf_Un : OpCodes.Add);
+  }
 }
 #endregion
 
 #region SubtractOperator
-public class SubtractOperator : ArithmeticOperator
+public sealed class SubtractOperator : NumericOperator
 {
-  internal SubtractOperator() : base("subtract", "op_Subtraction") { }
+  internal SubtractOperator() : base("Subtract", "op_Subtraction") { }
 
-  public override void EmitThisOperator(CodeGenerator cg)
-  {
-    cg.EmitFieldGet(typeof(Operator), "Subtract");
-  }
-
-  protected override void EmitOp(CodeGenerator cg, bool signed)
-  {
-    cg.ILG.Emit(OpCodes.Sub);
-  }
-
-  protected override object Evaluate(object a, object b, Options options)
+  public override object Evaluate(object a, object b, Options options)
   {
     object ret;
     if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
@@ -626,25 +634,20 @@ public class SubtractOperator : ArithmeticOperator
 
     throw NoOperation(a, b);
   }
+
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  {
+    cg.ILG.Emit(OpCodes.Sub);
+  }
 }
 #endregion
 
 #region MultiplyOperator
-public class MultiplyOperator : ArithmeticOperator
+public sealed class MultiplyOperator : NumericOperator
 {
-  internal MultiplyOperator() : base("multiply", "op_Multiply") { }
+  internal MultiplyOperator() : base("Multiply", "op_Multiply") { }
 
-  public override void EmitThisOperator(CodeGenerator cg)
-  {
-    cg.EmitFieldGet(typeof(Operator), "Multiply");
-  }
-
-  protected override void EmitOp(CodeGenerator cg, bool signed)
-  {
-    cg.ILG.Emit(CompilerState.Current.Checked ? signed ? OpCodes.Mul_Ovf : OpCodes.Mul_Ovf_Un : OpCodes.Mul);
-  }
-
-  protected override object Evaluate(object a, object b, Options options)
+  public override object Evaluate(object a, object b, Options options)
   {
     object ret;
     if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
@@ -698,46 +701,158 @@ public class MultiplyOperator : ArithmeticOperator
 
     throw NoOperation(a, b);
   }
+
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  {
+    cg.ILG.Emit(CompilerState.Current.Checked ? signed ? OpCodes.Mul_Ovf : OpCodes.Mul_Ovf_Un : OpCodes.Mul);
+  }
 }
 #endregion
 
 #region DivideOperator
-public class DivideOperator : ArithmeticOperator
+public sealed class DivideOperator : NumericOperator
 {
-  internal DivideOperator() : base("divide", "op_Division") { }
+  internal DivideOperator() : base("Divide", "op_Division") { }
 
-  public override void EmitThisOperator(CodeGenerator cg)
-  {
-    cg.EmitFieldGet(typeof(Operator), "Divide");
-  }
-
-  protected override void EmitOp(CodeGenerator cg, bool signed)
-  {
-    cg.ILG.Emit(signed ? OpCodes.Div : OpCodes.Div_Un);
-  }
-
-  protected override object Evaluate(object a, object b, Options options)
+  public override object Evaluate(object a, object b, Options options)
   {
     object ret;
     if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
 
     switch(Convert.GetTypeCode(a))
     {
-      case TypeCode.Byte: return (byte)a / (byte)b;
       case TypeCode.Double: return (double)a / (double)b;
-      case TypeCode.Int16: return (short)a / (short)b;
       case TypeCode.Int32: return (int)a / (int)b;
       case TypeCode.Int64: return (long)a / (long)b;
-      case TypeCode.SByte: return (sbyte)a / (sbyte)b;
       case TypeCode.Single: return (float)a / (float)b;
-      case TypeCode.UInt16: return (ushort)a / (ushort)b;
       case TypeCode.UInt32: return (uint)a / (uint)b;
       case TypeCode.UInt64: return (ulong)a / (ulong)b;
     }
 
     throw NoOperation(a, b);
   }
+
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  {
+    cg.ILG.Emit(signed ? OpCodes.Div : OpCodes.Div_Un);
+  }
 }
+#endregion
+
+#region ModulusOperator
+public sealed class ModulusOperator : NumericOperator
+{
+  internal ModulusOperator() : base("Modulus", "op_Modulus") { }
+
+  public override object Evaluate(object a, object b, Options options)
+  {
+    object ret;
+    if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
+
+    switch(Convert.GetTypeCode(a))
+    {
+      case TypeCode.Double: return LowLevel.DoubleRemainder((double)a, (double)b);
+      case TypeCode.Int32: return (int)a % (int)b;
+      case TypeCode.Int64: return (long)a % (long)b;
+      case TypeCode.Single: return LowLevel.FloatRemainder((float)a, (float)b);
+      case TypeCode.UInt32: return (uint)a % (uint)b;
+      case TypeCode.UInt64: return (ulong)a % (ulong)b;
+    }
+
+    throw NoOperation(a, b);
+  }
+
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  {
+    if(type == TypeWrapper.Double) cg.EmitCall(typeof(LowLevel), "DoubleRemainder");
+    else if(type == TypeWrapper.Single) cg.EmitCall(typeof(LowLevel), "FloatRemainder");
+    else cg.ILG.Emit(signed ? OpCodes.Rem : OpCodes.Rem_Un);
+  }
+}
+#endregion
+#endregion
+
+#region Bitwise operators
+#region BitwiseAndOperator
+public sealed class BitwiseAndOperator : NumericOperator
+{
+  internal BitwiseAndOperator() : base("BitwiseAnd", "op_BitwiseAnd") { }
+  public override object Evaluate(object a, object b, Options options)
+  {
+    object ret;
+    if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
+
+    switch(Convert.GetTypeCode(a))
+    {
+      case TypeCode.Int32: return (int)a & (int)b;
+      case TypeCode.Int64: return (long)a & (long)b;
+      case TypeCode.UInt32: return (uint)a & (uint)b;
+      case TypeCode.UInt64: return (ulong)a & (ulong)b;
+    }
+
+    throw NoOperation(a, b);
+  }
+
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  {
+    cg.ILG.Emit(OpCodes.And);
+  }
+}
+#endregion
+
+#region BitwiseOrOperator
+public sealed class BitwiseOrOperator : NumericOperator
+{
+  internal BitwiseOrOperator() : base("BitwiseOr", "op_BitwiseOr") { }
+  public override object Evaluate(object a, object b, Options options)
+  {
+    object ret;
+    if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
+
+    switch(Convert.GetTypeCode(a))
+    {
+      case TypeCode.Int32: return (int)a | (int)b;
+      case TypeCode.Int64: return (long)a | (long)b;
+      case TypeCode.UInt32: return (uint)a | (uint)b;
+      case TypeCode.UInt64: return (ulong)a | (ulong)b;
+    }
+
+    throw NoOperation(a, b);
+  }
+
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  {
+    cg.ILG.Emit(OpCodes.Or);
+  }
+}
+#endregion
+
+#region BitwiseXorOperator
+public sealed class BitwiseXorOperator : NumericOperator
+{
+  internal BitwiseXorOperator() : base("BitwiseXor", "op_BitwiseXor") { }
+  public override object Evaluate(object a, object b, Options options)
+  {
+    object ret;
+    if(NormalizeTypesOrCallOverload(ref a, ref b, out ret)) return ret;
+
+    switch(Convert.GetTypeCode(a))
+    {
+      case TypeCode.Int32: return (int)a ^ (int)b;
+      case TypeCode.Int64: return (long)a ^ (long)b;
+      case TypeCode.UInt32: return (uint)a ^ (uint)b;
+      case TypeCode.UInt64: return (ulong)a ^ (ulong)b;
+    }
+
+    throw NoOperation(a, b);
+  }
+
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  {
+    cg.ILG.Emit(OpCodes.Xor);
+  }
+}
+#endregion
 #endregion
 
 } // namespace Scripting.AST

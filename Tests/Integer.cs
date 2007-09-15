@@ -49,14 +49,14 @@ public sealed class IntegerTests
     i = new Integer(-1000.5);
     Assert.IsTrue(i == -1000);
 
-    i = new Integer("1000");
+    i = Integer.Parse("1000");
     Assert.IsTrue(i == 1000);
 
-    i = new Integer("-1000");
+    i = Integer.Parse("-1000");
     Assert.IsTrue(i == -1000);
 
-    Assert.IsTrue(ReallyBig == new Integer("1000000000000000000000000"));
-    Assert.IsTrue(-ReallyBig == new Integer("-1000000000000000000000000"));
+    Assert.IsTrue(ReallyBig == Integer.Parse("1000000000000000000000000"));
+    Assert.IsTrue(-ReallyBig == Integer.Parse("-1000000000000000000000000"));
   }
   #endregion
   
@@ -205,7 +205,7 @@ public sealed class IntegerTests
     
     Assert.IsTrue(0-i == -i);
     Assert.IsTrue(i-0 == i);
-    
+
     Assert.IsTrue((Billion+Billion+Billion+Billion+Billion).ToString() == "5000000000");
   }
   #endregion
@@ -232,8 +232,8 @@ public sealed class IntegerTests
     Assert.IsTrue(1/ReallyBig == Integer.Zero);
     Assert.IsTrue(Billion/Billion == Integer.One);
     Assert.IsTrue(Billion/-Billion == Integer.MinusOne);
-    Assert.IsTrue(ReallyBig/5 == new Integer("200000000000000000000000"));
-    Assert.IsTrue(ReallyBig/-5 == new Integer("-200000000000000000000000"));
+    Assert.IsTrue(ReallyBig/5 == Integer.Parse("200000000000000000000000"));
+    Assert.IsTrue(ReallyBig/-5 == Integer.Parse("-200000000000000000000000"));
   }
   #endregion
   
@@ -319,6 +319,13 @@ public sealed class IntegerTests
   {
     Assert.IsTrue(Integer.Abs(Billion) == Billion);
     Assert.IsTrue(Integer.Abs(new Integer(-50)) == 50);
+
+    Assert.IsTrue(Integer.Pow(Trillion, 2) == ReallyBig);
+
+    Assert.IsTrue(Integer.GreatestCommonFactor(Billion, Trillion) == Billion);
+    Assert.IsTrue(Integer.GreatestCommonFactor(new Integer(42), new Integer(12)) == 6);
+
+    Assert.IsTrue(Integer.LeastCommonMultiple(new Integer(3), new Integer(4)) == 12);
   }
   #endregion
 }
