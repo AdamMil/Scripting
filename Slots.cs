@@ -62,9 +62,7 @@ public abstract class Slot
   /// <exception cref="NotSupportedException">Thrown if the slot is read-only or does not support code generation.</exception>
   public virtual void EmitSet(CodeGenerator cg, ASTNode valueNode)
   {
-    ITypeInfo desiredType = Type;
-    valueNode.Emit(cg, ref desiredType);
-    EmitSet(cg, desiredType);
+    EmitSet(cg, valueNode.Emit(cg));
   }
 
   /// <summary>In interpreted execution, evaluates the slot to retrieve the value.</summary>
@@ -463,7 +461,7 @@ public sealed class FieldSlot : Slot
 
   public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
-    cg.EmitRuntimeConversion(typeOnStack, Type);
+    cg.EmitConversion(typeOnStack, Type);
     if(Instance == null)
     {
       cg.EmitFieldSet(Field);
@@ -564,7 +562,7 @@ public sealed class LocalSlot : Slot
 
   public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
-    cg.EmitRuntimeConversion(typeOnStack, Type);
+    cg.EmitConversion(typeOnStack, Type);
     cg.ILG.Emit(OpCodes.Stloc, builder);
   }
 
@@ -735,7 +733,7 @@ public sealed class ParameterSlot : Slot
     if(IsByRef)
     {
       Slot temp = cg.AllocLocalTemp(Type);
-      cg.EmitRuntimeConversion(typeOnStack, Type);
+      cg.EmitConversion(typeOnStack, Type);
       temp.EmitSet(cg, Type);
 
       cg.EmitArgGet(ArgIndex);
@@ -804,7 +802,7 @@ public sealed class ThisSlot : Slot
 
   public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
-    cg.EmitRuntimeConversion(typeOnStack, Type);
+    cg.EmitConversion(typeOnStack, Type);
     cg.ILG.Emit(OpCodes.Starg, 0);
   }
 
@@ -860,7 +858,7 @@ public sealed class TopLevelSlot : Slot
 
   public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
   {
-    cg.EmitRuntimeConversion(typeOnStack, type);
+    cg.EmitConversion(typeOnStack, type);
     cg.EmitSafeConversion(type, TypeWrapper.Object);
     Slot temp = cg.AllocLocalTemp(TypeWrapper.Object);
     temp.EmitSet(cg);

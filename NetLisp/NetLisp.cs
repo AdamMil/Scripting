@@ -108,8 +108,9 @@ public sealed class NetLispLanguage : Language
     if(type == DecoratorType.Compiled)
     {
       decorator.AddToEndOfStage(new VariableSlotResolver(type));
-      decorator.AddToEndOfStage(new TailMarkerStage());
+      decorator.AddToEndOfStage(new ContextMarkerStage());
     }
+    decorator.AddToEndOfStage(new CoreSemanticChecker(type));
 
     return decorator;
   }

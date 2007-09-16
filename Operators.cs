@@ -21,10 +21,16 @@ public abstract class Operator
 
   public readonly string Name;
 
-  public abstract void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref ITypeInfo desiredType);
+  public abstract ITypeInfo Emit(CodeGenerator cg, ITypeInfo desiredType, IList<ASTNode> nodes);
   public abstract void EmitThisOperator(CodeGenerator cg);
   public abstract object Evaluate(IList<ASTNode> nodes);
   public abstract ITypeInfo GetValueType(IList<ASTNode> nodes);
+
+  public virtual void SetValueContext(ITypeInfo opContextType, IList<ASTNode> nodes)
+  {
+    ITypeInfo type = GetValueType(nodes);
+    foreach(ASTNode node in nodes) node.SetValueContext(type);
+  }
   
   public object Evaluate(params object[] values)
   {
@@ -55,10 +61,10 @@ public abstract class UnaryOperator : Operator
 {
   protected UnaryOperator(string name) : base(name) { }
 
-  public override void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg, ITypeInfo desiredType, IList<ASTNode> nodes)
   {
     if(nodes.Count != 1) throw new ArgumentException();
-    Emit(cg, nodes[0], ref desiredType);
+    return Emit(cg, desiredType, nodes[0]);
   }
 
   public sealed override object Evaluate(IList<ASTNode> nodes)
@@ -73,9 +79,20 @@ public abstract class UnaryOperator : Operator
     return GetValueType(nodes[0]);
   }
 
-  public abstract void Emit(CodeGenerator cg, ASTNode node, ref ITypeInfo desiredType);
+  public override void SetValueContext(ITypeInfo opContextType, IList<ASTNode> nodes)
+  {
+    if(nodes.Count != 1) throw new ArgumentException();
+    SetValueContext(opContextType, nodes[0]);
+  }
+
+  public abstract ITypeInfo Emit(CodeGenerator cg, ITypeInfo desiredType, ASTNode node);
   public abstract object Evaluate(object obj);
   public abstract ITypeInfo GetValueType(ASTNode node);
+
+  public virtual void SetValueContext(ITypeInfo opContextType, ASTNode node)
+  {
+    node.SetValueContext(GetValueType(node));
+  }
 }
 #endregion
 
@@ -125,13 +142,12 @@ public abstract class NumericOperator : NaryOperator
 
   public abstract object Evaluate(object a, object b, Options options);
 
-  public sealed override void Emit(CodeGenerator cg, IList<ASTNode> nodes, ref ITypeInfo desiredType)
+  public sealed override ITypeInfo Emit(CodeGenerator cg, ITypeInfo desiredType, IList<ASTNode> nodes)
   {
     if(nodes.Count < 2) throw new ArgumentException();
 
     bool autoPromote = CompilerState.Current.Checked && CompilerState.Current.PromoteOnOverflow;
-    ITypeInfo lhs = nodes[0].ValueType;
-    nodes[0].Emit(cg, ref lhs);
+    ITypeInfo lhs = nodes[0].Emit(cg);
 
     for(int nodeIndex=1; nodeIndex<nodes.Count; nodeIndex++)
     {
@@ -155,7 +171,7 @@ public abstract class NumericOperator : NaryOperator
         ITypeInfo type = GetTypeForPrimitiveNumerics(lhs, rhs);
         cg.EmitSafeConversion(lhs, type);
 
-        nodes[nodeIndex].Emit(cg, ref realRhs);
+        realRhs = nodes[nodeIndex].Emit(cg);
         if(shouldImplicitlyConvertToNumeric) cg.EmitSafeConversion(realRhs, rhs); // convert the right side if necessary
         cg.EmitSafeConversion(rhs, type);
         EmitOp(cg, type, true);
@@ -164,7 +180,7 @@ public abstract class NumericOperator : NaryOperator
       else // at least one type is a non-primitive, or we need to check for promotion
       {
         // if we got here because a type is non-primitive, then check overloads and implicit conversions...
-        if(!autoPromote && (!CG.IsPrimitiveNumeric(ltc) || !CG.IsPrimitiveNumeric(rtc)))
+        if(!autoPromote || !CG.IsPrimitiveNumeric(ltc) || !CG.IsPrimitiveNumeric(rtc))
         {
           Overload overload = GetOperatorOverload(lhs, rhs);
           if(overload != null) // if there's an operator overload, use it.
@@ -203,29 +219,31 @@ public abstract class NumericOperator : NaryOperator
     }
     
     cg.EmitSafeConversion(lhs, desiredType);
+    return desiredType;
   }
 
   public override ITypeInfo GetValueType(IList<ASTNode> nodes)
   {
     if(nodes.Count == 0) throw new ArgumentException();
 
-    // with promotion enabled, we can never be sure of what type we'll return
-    if(CompilerState.Current.Checked && CompilerState.Current.PromoteOnOverflow)
+    ITypeInfo type = nodes[0].ValueType;
+    for(int nodeIndex=1; nodeIndex<nodes.Count; nodeIndex++)
     {
-      return nodes.Count == 1 ? nodes[0].ValueType : TypeWrapper.Unknown;
+      type = GetValueType(type, nodes[nodeIndex].ValueType);
+    }
+
+    // with promotion enabled, we can never be sure of what type we'll return (if it's a primitive type)
+    if(CompilerState.Current.Checked && CompilerState.Current.PromoteOnOverflow && CG.IsPrimitiveNumeric(type))
+    {
+      return nodes.Count == 1 ? type : TypeWrapper.Unknown;
     }
     else
     {
-      ITypeInfo type = nodes[0].ValueType;
-      for(int nodeIndex=1; nodeIndex<nodes.Count; nodeIndex++)
-      {
-        type = GetValueType(type, nodes[nodeIndex].ValueType);
-      }
       return type;
     }
   }
 
-  protected abstract void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed);
+  protected abstract void EmitOp(CodeGenerator cg, ITypeInfo typeOnStack, bool signed);
 
   protected bool NormalizeTypesOrCallOverload(ref object a, ref object b, out object value)
   {
@@ -373,17 +391,19 @@ public abstract class NumericOperator : NaryOperator
       {
         type = overload.Method.ReturnType;
       }
-
-      // maybe there are implicit conversions to primitive types
-      ITypeInfo newLhs = CG.GetImplicitConversionToPrimitiveNumeric(lhs),
-                newRhs = CG.GetImplicitConversionToPrimitiveNumeric(rhs);
-      if(newLhs != null && newRhs != null)
-      {
-        type = GetTypeForPrimitiveNumerics(newLhs, newRhs);
-      }
       else
       {
-        type = TypeWrapper.Unknown; // as a last resort we'll invoke the runtime function, which returns an unknown type
+        // maybe there are implicit conversions to primitive types
+        ITypeInfo newLhs = CG.GetImplicitConversionToPrimitiveNumeric(lhs),
+                  newRhs = CG.GetImplicitConversionToPrimitiveNumeric(rhs);
+        if(newLhs != null && newRhs != null)
+        {
+          type = GetTypeForPrimitiveNumerics(newLhs, newRhs);
+        }
+        else
+        {
+          type = TypeWrapper.Unknown; // as a last resort we'll invoke the runtime function, which returns an unknown type
+        }
       }
     }
     
@@ -461,10 +481,9 @@ public sealed class LogicalTruthOperator : UnaryOperator
 {
   public LogicalTruthOperator() : base("truth") { }
 
-  public override void Emit(CodeGenerator cg, ASTNode node, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg, ITypeInfo desiredType, ASTNode node)
   {
-    ITypeInfo type = TypeWrapper.Bool;
-    node.Emit(cg, ref type);
+    ITypeInfo type = node.Emit(cg);
 
     if(type == null) type = TypeWrapper.Bool; // we consider null to be false, and so does the runtime
 
@@ -486,7 +505,7 @@ public sealed class LogicalTruthOperator : UnaryOperator
       }
     }
 
-    desiredType = type;
+    return type;
   }
 
   public override void EmitThisOperator(CodeGenerator cg)
@@ -507,6 +526,8 @@ public sealed class LogicalTruthOperator : UnaryOperator
 #endregion
 #endregion
 
+// TODO: make these work with only one argument. multiplication and division should use a default LHS of 1 if they
+// receive only one value. all others should use a default LHS of zero.
 #region Arithmetic operators
 #region AddOperator
 public sealed class AddOperator : NumericOperator
@@ -568,7 +589,7 @@ public sealed class AddOperator : NumericOperator
     throw NoOperation(a, b);
   }
 
-  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo typeOnStack, bool signed)
   {
     cg.ILG.Emit(CompilerState.Current.Checked ? signed ? OpCodes.Add_Ovf : OpCodes.Add_Ovf_Un : OpCodes.Add);
   }
@@ -635,7 +656,7 @@ public sealed class SubtractOperator : NumericOperator
     throw NoOperation(a, b);
   }
 
-  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo typeOnStack, bool signed)
   {
     cg.ILG.Emit(OpCodes.Sub);
   }
@@ -702,7 +723,7 @@ public sealed class MultiplyOperator : NumericOperator
     throw NoOperation(a, b);
   }
 
-  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo typeOnStack, bool signed)
   {
     cg.ILG.Emit(CompilerState.Current.Checked ? signed ? OpCodes.Mul_Ovf : OpCodes.Mul_Ovf_Un : OpCodes.Mul);
   }
@@ -732,7 +753,7 @@ public sealed class DivideOperator : NumericOperator
     throw NoOperation(a, b);
   }
 
-  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo typeOnStack, bool signed)
   {
     cg.ILG.Emit(signed ? OpCodes.Div : OpCodes.Div_Un);
   }
@@ -762,10 +783,10 @@ public sealed class ModulusOperator : NumericOperator
     throw NoOperation(a, b);
   }
 
-  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo typeOnStack, bool signed)
   {
-    if(type == TypeWrapper.Double) cg.EmitCall(typeof(LowLevel), "DoubleRemainder");
-    else if(type == TypeWrapper.Single) cg.EmitCall(typeof(LowLevel), "FloatRemainder");
+    if(typeOnStack == TypeWrapper.Double) cg.EmitCall(typeof(LowLevel), "DoubleRemainder");
+    else if(typeOnStack == TypeWrapper.Single) cg.EmitCall(typeof(LowLevel), "FloatRemainder");
     else cg.ILG.Emit(signed ? OpCodes.Rem : OpCodes.Rem_Un);
   }
 }
@@ -793,7 +814,7 @@ public sealed class BitwiseAndOperator : NumericOperator
     throw NoOperation(a, b);
   }
 
-  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo typeOnStack, bool signed)
   {
     cg.ILG.Emit(OpCodes.And);
   }
@@ -820,7 +841,7 @@ public sealed class BitwiseOrOperator : NumericOperator
     throw NoOperation(a, b);
   }
 
-  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo typeOnStack, bool signed)
   {
     cg.ILG.Emit(OpCodes.Or);
   }
@@ -847,7 +868,7 @@ public sealed class BitwiseXorOperator : NumericOperator
     throw NoOperation(a, b);
   }
 
-  protected override void EmitOp(CodeGenerator cg, ITypeInfo type, bool signed)
+  protected override void EmitOp(CodeGenerator cg, ITypeInfo typeOnStack, bool signed)
   {
     cg.ILG.Emit(OpCodes.Xor);
   }

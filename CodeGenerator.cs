@@ -63,8 +63,8 @@ public static class CG
     if(a == null || b == null) return TypeWrapper.Object; // if either is null, return Object
 
     // if either are void, return the other one.
-    if(a == typeof(void)) return b;
-    if(b == typeof(void)) return a;
+    if(a == TypeWrapper.Void) return b;
+    if(b == TypeWrapper.Void) return a;
 
     if(a.IsValueType != b.IsValueType)
     {
@@ -112,7 +112,7 @@ public static class CG
       hadNullOrObject = true;
     }
 
-    for(int i=1; i<types.Length && type != typeof(object); i++)
+    for(int i=1; i<types.Length && type != TypeWrapper.Object; i++)
     {
       ITypeInfo other = types[i];
       if(other == null || other == TypeWrapper.Object)
@@ -877,9 +877,32 @@ public class CodeGenerator
           else if(value is Integer)
           {
             Integer i = (Integer)value;
-            EmitConstant((short)i.Sign);
-            EmitConstant(i.GetInternalData());
-            EmitNew(typeof(Integer), typeof(short), typeof(uint[]));
+            if(i >= int.MinValue && i <= int.MaxValue)
+            {
+              EmitInt(Integer.ToInt32(i));
+              EmitNew(typeof(Integer), typeof(int));
+            }
+            else if(i >= uint.MinValue && i <= uint.MaxValue)
+            {
+              EmitInt((int)Integer.ToUInt32(i));
+              EmitNew(typeof(Integer), typeof(uint));
+            }
+            else if(i >= long.MinValue && i <= long.MaxValue)
+            {
+              EmitConstant(Integer.ToInt64(i));
+              EmitNew(typeof(Integer), typeof(long));
+            }
+            else if(i >= ulong.MinValue && i <= ulong.MaxValue)
+            {
+              EmitConstant(Integer.ToUInt64(i));
+              EmitNew(typeof(Integer), typeof(ulong));
+            }
+            else
+            {
+              EmitConstant((short)i.Sign);
+              EmitConstant(i.GetInternalData());
+              EmitNew(typeof(Integer), typeof(short), typeof(uint[]));
+            }
           }
           else if(value is Rational)
           {
@@ -902,22 +925,31 @@ public class CodeGenerator
   }
 
   /// <summary>Emits a constant value converted to the given type if possible.</summary>
+  /// <returns>Returns the type that was actually emitted.</returns>
   /// <remarks>This method will attempt to do the conversion at compile time if possible.</remarks>
-  public void EmitConstant(object value, ref ITypeInfo desiredType)
+  public ITypeInfo EmitConstant(object value, ITypeInfo desiredType)
   {
-    if(desiredType == null) throw new ArgumentNullException();
-
     ITypeInfo valueType = CG.GetTypeInfo(value);
     // do the conversion at compile time if possible
     if(CanEmitConstant(desiredType.DotNetType) && CG.HasImplicitConversion(valueType, desiredType))
     {                                           
       EmitConstant(Ops.ConvertTo(value, desiredType.DotNetType));
+      return desiredType;
     }
     else // otherwise, do the conversion at runtime
     {
       EmitConstant(value);
-      if(!TryEmitSafeConversion(valueType, desiredType)) desiredType = valueType;
+      return TryEmitSafeConversion(valueType, desiredType) ? desiredType : valueType;
     }
+  }
+
+  /// <summary>Emits a runtime conversion to <paramref name="desiredType"/> if <paramref name="typeOnStack"/> is
+  /// <see cref="TypeWrapper.Unknown"/>, and a safe conversion otherwise.
+  /// </summary>
+  public void EmitConversion(ITypeInfo typeOnStack, ITypeInfo desiredType)
+  {
+    if(typeOnStack == TypeWrapper.Unknown) EmitRuntimeConversion(typeOnStack, desiredType);
+    else EmitSafeConversion(typeOnStack, desiredType);
   }
 
   /// <summary>Emits a default value of the given type.</summary>
@@ -960,7 +992,7 @@ public class CodeGenerator
         break;
 
       default:
-        if(type == typeof(void))
+        if(type == TypeWrapper.Void)
         {
           return;
         }
@@ -1367,7 +1399,7 @@ public class CodeGenerator
       EmitSafeConversion(typeOnStack, TypeWrapper.Object);
 
       // check for some built-in types and emit smaller code for them
-      if(destinationType.DotNetType == typeof(ICallable))
+      if(destinationType == TypeWrapper.ICallable)
       {
         EmitCall(typeof(Ops), "ConvertToCallable");
       }
@@ -1482,9 +1514,7 @@ public class CodeGenerator
 
   public void EmitTypedNode(ASTNode node, ITypeInfo desiredType)
   {
-    ITypeInfo type = desiredType;
-    node.Emit(this, ref type);
-    EmitRuntimeConversion(type, desiredType);
+    EmitConversion(node.Emit(this), desiredType);
   }
   
   public void EmitTypedOperator(Operator op, ITypeInfo desiredType, params ASTNode[] nodes)
@@ -1494,15 +1524,13 @@ public class CodeGenerator
 
   public void EmitTypedOperator(Operator op, ITypeInfo desiredType, IList<ASTNode> nodes)
   {
-    ITypeInfo type = desiredType;
-    op.Emit(this, nodes, ref type);
-    EmitRuntimeConversion(type, desiredType);
+    EmitConversion(op.Emit(this, desiredType, nodes), desiredType);
   }
 
   public void EmitTypedSlot(Slot slot, ITypeInfo desiredType)
   {
     slot.EmitGet(this);
-    EmitRuntimeConversion(slot.Type, desiredType);
+    EmitConversion(slot.Type, desiredType);
   }
 
   /// <summary>Emits code to convert a value from one type to another. This method attempts all the same conversions
@@ -1529,8 +1557,7 @@ public class CodeGenerator
   /// <summary>Emits a node in a void context, meaning that the evaluation stack will be unchanged.</summary>
   public void EmitVoid(ASTNode node)
   {
-    ITypeInfo type = TypeWrapper.Void;
-    node.Emit(this, ref type);
+    ITypeInfo type = node.Emit(this);
     if(type != TypeWrapper.Void)
     {
       throw new CompileTimeException("Node emitted in a void context must not visibly alter the stack.");
@@ -1540,10 +1567,7 @@ public class CodeGenerator
   /// <summary>Emits a collection of nodes in a void context, meaning that the evaluation stack will be unchanged.</summary>
   public void EmitVoids(ICollection<ASTNode> nodes)
   {
-    foreach(ASTNode node in nodes)
-    {
-      EmitVoid(node);
-    }
+    foreach(ASTNode node in nodes) EmitVoid(node);
   }
 
   public void Finish()
@@ -1682,7 +1706,7 @@ public class CodeGenerator
     if(destType == null) throw new ArgumentNullException();
     if(typeOnStack == destType) return true; // if the types are the same, no work needs to be done
 
-    if(destType == typeof(void)) // if we're converting to 'void', we simply pop the value from the stack
+    if(destType == TypeWrapper.Void) // if we're converting to 'void', we simply pop the value from the stack
     {
       EmitPop();
       return true;
@@ -1767,7 +1791,7 @@ public class CodeGenerator
           {
             ILG.Emit(CG.IsSigned(typeOnStack) ? OpCodes.Conv_Ovf_U8 : OpCodes.Conv_U8);
           }
-          else if(typeOnStack != typeof(long))
+          else if(typeOnStack != TypeWrapper.Long)
           {
             ILG.Emit(OpCodes.Conv_U8);
           }

@@ -12,7 +12,10 @@
 .imagebase 0x00300000
 .corflags 0x00000001    //  ILONLY
 
-.class public auto ansi sealed Scripting.Runtime.LowLevel
+.namespace Scripting.Runtime
+{
+
+.class public auto ansi sealed LowLevel
 {
   .method public static hidebysig float32 FloatRemainder(float32 a, float32 b) cil managed
   {
@@ -32,3 +35,5 @@
     ret
   }
 }
+  
+} // .namespace Scripting.Runtime

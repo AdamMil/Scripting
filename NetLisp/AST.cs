@@ -19,10 +19,10 @@ public static class LispTypes
 }
 #endregion
 
-#region VariableSlotResolver
-public class VariableSlotResolver : PrefixVisitor
+#region CoreSemanticChecker
+public class CoreSemanticChecker : PrefixVisitor
 {
-  public VariableSlotResolver(DecoratorType type) : base(type) { }
+  public CoreSemanticChecker(DecoratorType type) : base(type) { }
 
   public override Stage Stage
   {
@@ -31,7 +31,25 @@ public class VariableSlotResolver : PrefixVisitor
 
   public override void Process(ref ASTNode rootNode)
   {
-    RecursiveVisit(rootNode);
+    base.Process(ref rootNode);
+  }
+
+  protected override bool Visit(ASTNode node)
+  {
+    node.CheckSemantics();
+    return true;
+  }
+}
+#endregion
+
+#region VariableSlotResolver
+public class VariableSlotResolver : PrefixVisitor
+{
+  public VariableSlotResolver(DecoratorType type) : base(type) { }
+
+  public override Stage Stage
+  {
+    get { return Stage.Decorate; }
   }
 
   protected override bool Visit(ASTNode node)
@@ -344,21 +362,21 @@ public sealed class CallNode : ASTNode
     }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
     VariableNode functionVar = Function as VariableNode;
     if(functionVar != null && ShouldInline(functionVar.Name))
     {
-      EmitBuiltinFunction(cg, functionVar.Name, ref desiredType);
+      return EmitBuiltinFunction(cg, functionVar.Name);
     }
     else
     {
-      bool doTailCall = IsTail && desiredType == ValueType;
+      bool doTailCall = IsTail && ContextType == ValueType;
       cg.EmitTypedNode(Function, TypeWrapper.ICallable);
       cg.EmitObjectArray(Arguments);
       if(doTailCall) cg.ILG.Emit(OpCodes.Tailcall);
       cg.EmitCall(typeof(ICallable), "Call");
-      TailReturn(cg, ValueType, ref desiredType);
+      return TailReturn(cg, ValueType);
     }
   }
 
@@ -367,19 +385,44 @@ public sealed class CallNode : ASTNode
     return Ops.ConvertToCallable(Function.Evaluate()).Call(ASTNode.EvaluateNodes(Arguments));
   }
 
-  void EmitBuiltinFunction(CodeGenerator cg, string name, ref ITypeInfo desiredType)
+  public override void SetValueContext(ITypeInfo desiredType)
   {
-    ITypeInfo type = desiredType;
+    base.SetValueContext(desiredType);
+
+    Function.SetValueContext(TypeWrapper.ICallable);
+
+    VariableNode functionVar = Function as VariableNode;
+    if(functionVar != null && ShouldInline(functionVar.Name))
+    {
+      switch(functionVar.Name)
+      {
+        case "+": Operator.Add.SetValueContext(desiredType, Arguments); break;
+        case "-": Operator.Subtract.SetValueContext(desiredType, Arguments); break;
+        case "*": Operator.Multiply.SetValueContext(desiredType, Arguments); break;
+        case "/": Operator.Divide.SetValueContext(desiredType, Arguments); break;
+        case "modulo": Operator.Modulus.SetValueContext(desiredType, Arguments); break;
+        default: throw new NotImplementedException();
+      }
+    }
+    else
+    {
+      foreach(ASTNode node in Arguments) node.SetValueContext(TypeWrapper.Object);
+    }
+  }
+
+  ITypeInfo EmitBuiltinFunction(CodeGenerator cg, string name)
+  {
+    ITypeInfo type = ContextType;
     switch(name)
     {
-      case "+":   Operator.Add.Emit(cg, Arguments, ref type); break;
-      case "-":   Operator.Subtract.Emit(cg, Arguments, ref type); break;
-      case "*":   Operator.Multiply.Emit(cg, Arguments, ref type); break;
-      case "/":   Operator.Divide.Emit(cg, Arguments, ref type); break;
-      case "modulo": Operator.Modulus.Emit(cg, Arguments, ref type); break;
+      case "+": type = Operator.Add.Emit(cg, type, Arguments); break;
+      case "-": type = Operator.Subtract.Emit(cg, type, Arguments); break;
+      case "*": type = Operator.Multiply.Emit(cg, type, Arguments); break;
+      case "/": type = Operator.Divide.Emit(cg, type, Arguments); break;
+      case "modulo": type = Operator.Modulus.Emit(cg, type, Arguments); break;
       default: throw new NotImplementedException();
     }
-    TailReturn(cg, type, ref desiredType);
+    return TailReturn(cg, type);
   }
 
   ITypeInfo GetBuiltinFunctionType(string name)
@@ -449,7 +492,7 @@ public sealed class ListNode : ASTNode
     get { return LispTypes.Pair; }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
     ITypeInfo typeOnStack;
     if(ListItems.Count == 0)
@@ -457,7 +500,7 @@ public sealed class ListNode : ASTNode
       cg.EmitNull();
       typeOnStack = null;
     }
-    else if(IsVoid(desiredType))
+    else if(IsVoid(ContextType))
     {
       cg.EmitVoids(ListItems);
       if(DotItem != null) cg.EmitVoid(DotItem);
@@ -477,7 +520,7 @@ public sealed class ListNode : ASTNode
       typeOnStack = LispTypes.Pair;
     }
     
-    TailReturn(cg, typeOnStack, ref desiredType);
+    return TailReturn(cg, typeOnStack);
   }
 
   public override object Evaluate()
@@ -488,6 +531,12 @@ public sealed class ListNode : ASTNode
       obj = new Pair(ListItems[i].Evaluate(), obj);
     }
     return obj;
+  }
+
+  public override void SetValueContext(ITypeInfo desiredType)
+  {
+    base.SetValueContext(desiredType);
+    foreach(ASTNode node in ListItems) node.SetValueContext(TypeWrapper.Object);
   }
 }
 #endregion
@@ -548,7 +597,13 @@ public sealed class LocalBindingNode : ASTNode
     {
       get { return (VariableNode)Children[0]; }
     }
-    
+
+    public override void SetValueContext(ITypeInfo desiredType)
+    {
+      base.SetValueContext(desiredType);
+      if(InitialValue != null) InitialValue.SetValueContext(Variable.ValueType);
+    }
+
     readonly ITypeInfo type;
   }
   #endregion
@@ -568,7 +623,7 @@ public sealed class LocalBindingNode : ASTNode
     get { return Body.ValueType; }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
     cg.BeginScope();
     foreach(Binding binding in Bindings)
@@ -584,7 +639,7 @@ public sealed class LocalBindingNode : ASTNode
       }
     }
     
-    Body.Emit(cg, ref desiredType);
+    return Body.Emit(cg);
     cg.EndScope();
   }
 
@@ -630,6 +685,13 @@ public sealed class LocalBindingNode : ASTNode
     foreach(ASTNode node in Bindings) node.MarkTail(false);
     Body.MarkTail(tail);
   }
+
+  public override void SetValueContext(ITypeInfo desiredType)
+  {
+    base.SetValueContext(desiredType);
+    foreach(ASTNode node in Bindings) node.SetValueContext(TypeWrapper.Unknown);
+    Body.SetValueContext(desiredType);
+  }
 }
 #endregion
 
@@ -654,26 +716,26 @@ public sealed class VectorNode : ASTNode
 
   public override ITypeInfo ValueType
   {
-    get { return GetElementType().MakeArrayType(); }
+    get { return ElementType.MakeArrayType(); }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
-    if(IsVoid(desiredType))
+    if(IsVoid(ContextType))
     {
       cg.EmitVoids(Children);
+      return TailReturn(cg);
     }
     else
     {
-      cg.EmitArray(Children, GetElementType());
+      cg.EmitArray(Children, ElementType);
+      return TailReturn(cg, ValueType);
     }
-
-    TailReturn(cg, IsVoid(desiredType) ? desiredType : ValueType, ref desiredType);
   }
 
   public override object Evaluate()
   {
-    Type type = GetElementType().DotNetType;
+    Type type = ElementType.DotNetType;
     Array array = Array.CreateInstance(type, Children.Count);
     for(int i=0; i<array.Length; i++)
     {
@@ -682,13 +744,22 @@ public sealed class VectorNode : ASTNode
     return array;
   }
 
-  ITypeInfo GetElementType()
+  public override void SetValueContext(ITypeInfo desiredType)
   {
-    if(elementType == null)
+    base.SetValueContext(desiredType);
+    foreach(ASTNode node in Children) node.SetValueContext(ElementType);
+  }
+
+  ITypeInfo ElementType
+  {
+    get
     {
-      elementType = CG.GetCommonBaseType(Children);
+      if(elementType == null)
+      {
+        elementType = CG.GetCommonBaseType(Children);
+      }
+      return elementType;
     }
-    return elementType;
   }
 
   ITypeInfo elementType;

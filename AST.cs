@@ -232,6 +232,16 @@ public abstract class ASTNode
     }
   }
 
+  /// <summary>Gets the context type in which this node will be emitted or evaluated. The context type is the type that
+  /// the enclosing context expects this node to emit, although it is not absolutely necessary that the node emit that
+  /// type unless this is a tail node. A context type of <see cref="TypeWrapper.Unknown"/> implies that any emission
+  /// from the node is okay.
+  /// </summary>
+  public ITypeInfo ContextType
+  {
+    get { return contextType; }
+  }
+
   /// <summary>Gets or sets whether this node's value is constant and can be safely evaluated at compilet time.</summary>
   public bool IsConstant
   {
@@ -257,7 +267,7 @@ public abstract class ASTNode
 
   /// <summary>Gets the natural type of this node's value when emitted. If the value type is <see cref="Void"/>, this
   /// node normally emits nothing. If the value type is null, this node normally emits null. A node may emit a type
-  /// other than its value type depending on the <c>desiredType</c> parameter passed to the <see cref="Emit"/> method.
+  /// other than its natural type only to satisfy the <see cref="ContextType"/>.
   /// </summary>
   public abstract ITypeInfo ValueType { get; }
 
@@ -327,12 +337,14 @@ public abstract class ASTNode
     return nodes.ToArray();
   }
 
+  public virtual void CheckSemantics() { }
+
   public virtual object Evaluate()
   {
     throw new NotSupportedException();
   }
 
-  public abstract void Emit(CodeGenerator cg, ref ITypeInfo desiredType);
+  public abstract ITypeInfo Emit(CodeGenerator cg);
 
   /// <summary>Marks this node and its child nodes based on the <paramref name="tail"/> parameter.</summary>
   /// <param name="tail">If true, this node's value will be returned from the function in which it's emitted.</param>
@@ -351,10 +363,15 @@ public abstract class ASTNode
     }
   }
 
+  public virtual void SetValueContext(ITypeInfo desiredType)
+  {
+    contextType = desiredType;
+  }
+
   /// <summary>If this node is a tail node (<see cref="IsTail"/> is true), this method will emit a proper return from
-  /// the function. It assumes that the value on the stack (if any) is exactly what is required for a proper return.
+  /// the function. It assumes that the type of the value on the stack (if any) is equal to <see cref="ContextType"/>.
   /// </summary>
-  protected void TailReturn(CodeGenerator cg)
+  protected ITypeInfo TailReturn(CodeGenerator cg)
   {
     if(!IsInTry)
     {
@@ -364,26 +381,27 @@ public abstract class ASTNode
     {
       throw new NotImplementedException(); // TODO: implement leave from try blocks
     }
+    return ContextType;
   }
 
   /// <summary>If this node is a tail node (<see cref="IsTail"/> is true), this method will emit a conversion
-  /// from <paramref name="typeOnStack"/> to <paramref name="desiredType"/> and emit a proper return from the function.
-  /// Otherwise, it will simply assign <paramref name="typeOnStack"/> to <paramref name="desiredType"/>.
+  /// from <paramref name="typeOnStack"/> to <see cref="ContextType"/>, and emit a proper return from the function.
+  /// Otherwise, it will simply return <paramref name="typeOnStack"/>.
   /// </summary>
   /// <remarks>A call to this method should be placed in <see cref="Emit"/> implementations at the end of code paths
   /// where a child marked as a tail node might not have been emitted.
   /// </remarks>
-  protected void TailReturn(CodeGenerator cg, ITypeInfo typeOnStack, ref ITypeInfo desiredType)
+  protected ITypeInfo TailReturn(CodeGenerator cg, ITypeInfo typeOnStack)
   {
     if(!IsTail)
     {
-      desiredType = typeOnStack;
+      return typeOnStack;
     }
     else
     {
-      if(typeOnStack == TypeWrapper.Unknown) cg.EmitRuntimeConversion(typeOnStack, desiredType);
-      else cg.EmitSafeConversion(typeOnStack, desiredType);
-      TailReturn(cg);
+      if(typeOnStack == TypeWrapper.Void) cg.EmitDefault(ContextType);
+      else cg.EmitConversion(typeOnStack, ContextType);
+      return TailReturn(cg);
     }
   }
 
@@ -482,6 +500,7 @@ public abstract class ASTNode
 
   ASTNodeCollection children;
   List<Attribute> attributes;
+  ITypeInfo contextType;
   Flag flags;
 
   static readonly ASTNodeCollection EmptyNodeCollection = new ASTNodeCollection(null);
@@ -524,19 +543,19 @@ public class AssignNode : ASTNode
     get { return RHS.ValueType; }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
-    if(IsVoid(desiredType))
+    if(IsVoid(ContextType))
     {
       LHS.EmitSet(cg, RHS);
-      TailReturn(cg, desiredType, ref desiredType);
+      return TailReturn(cg, ContextType);
     }
     else
     {
       cg.EmitTypedNode(RHS, LHS.ValueType);
       cg.EmitDup();
       LHS.EmitSet(cg, LHS.ValueType);
-      TailReturn(cg, LHS.ValueType, ref desiredType);
+      return TailReturn(cg, LHS.ValueType);
     }
   }
 
@@ -545,6 +564,12 @@ public class AssignNode : ASTNode
     object newValue = RHS.Evaluate();
     LHS.EvaluateSet(newValue);
     return newValue;
+  }
+
+  public override void SetValueContext(ITypeInfo desiredType)
+  {
+    base.SetValueContext(desiredType);
+    RHS.SetValueContext(LHS.ValueType);
   }
 }
 #endregion
@@ -567,22 +592,15 @@ public class BlockNode : ASTNode
     }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
-    if(Children.Count != 0)
+    if(Children.Count == 0) return TailReturn(cg, TypeWrapper.Void);
+
+    for(int i=0; i<Children.Count-1; i++)
     {
-      for(int i=0; i<Children.Count-1; i++)
-      {
-        cg.EmitVoid(Children[i]);
-      }
-      
-      LastChild.Emit(cg, ref desiredType);
+      cg.EmitVoid(Children[i]);
     }
-    else if(!IsVoid(desiredType))
-    {
-      cg.EmitDefault(desiredType);
-      TailReturn(cg);
-    }
+    return LastChild.Emit(cg);
   }
 
   public override object Evaluate()
@@ -601,12 +619,19 @@ public class BlockNode : ASTNode
 
     if(Children.Count != 0) // mark all children false except the last one, which becomes the same as us
     {
-      for(int i=0; i<Children.Count-1; i++)
-      {
-        Children[i].MarkTail(false);
-      }
-      
+      for(int i=0; i<Children.Count-1; i++) Children[i].MarkTail(false);
       LastChild.MarkTail(tail);
+    }
+  }
+
+  public override void SetValueContext(ITypeInfo desiredType)
+  {
+    base.SetValueContext(desiredType);
+
+    if(Children.Count != 0)
+    {
+      for(int i=0; i<Children.Count-1; i++) Children[i].SetValueContext(TypeWrapper.Void);
+      LastChild.SetValueContext(desiredType);
     }
   }
 }
@@ -632,12 +657,10 @@ public abstract class CastNode : ASTNode
     get { return type; }
   }
 
-  public sealed override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public sealed override ITypeInfo Emit(CodeGenerator cg)
   {
-    ITypeInfo type = ValueType;
-    Value.Emit(cg, ref type);
-    EmitCast(cg, type, desiredType);
-    TailReturn(cg);
+    EmitCast(cg, Value.Emit(cg));
+    return TailReturn(cg);
   }
 
   public sealed override object Evaluate()
@@ -645,7 +668,13 @@ public abstract class CastNode : ASTNode
     return Ops.ConvertTo(Value.Evaluate(), type.DotNetType);
   }
 
-  protected abstract void EmitCast(CodeGenerator cg, ITypeInfo typeOnStack, ITypeInfo desiredType);
+  public override void SetValueContext(ITypeInfo desiredType)
+  {
+    base.SetValueContext(desiredType);
+    Value.SetValueContext(ValueType);
+  }
+
+  protected abstract void EmitCast(CodeGenerator cg, ITypeInfo typeOnStack);
 
   readonly ITypeInfo type;
 }
@@ -695,6 +724,7 @@ public abstract class FunctionNode : ASTNode
   }
 
   public readonly string Name;
+
   /// <summary>Gets the closure slots defined by this function. If set to a non-empty array, this method will create a
   /// new closure.
   /// </summary>
@@ -718,6 +748,14 @@ public abstract class FunctionNode : ASTNode
     }
     
     Body.MarkTail(true); // the body starts in a new function, so it always has a new tail
+  }
+
+  public override void SetValueContext(ITypeInfo desiredType)
+  {
+    base.SetValueContext(desiredType);
+
+    foreach(ASTNode parameter in Parameters) parameter.SetValueContext(TypeWrapper.Unknown);
+    Body.SetValueContext(ReturnType);
   }
 
   ITypeInfo returnType;
@@ -775,19 +813,19 @@ public class IfNode : ASTNode
 
   public readonly UnaryOperator TruthOperator;
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
     cg.EmitTypedOperator(TruthOperator, TypeWrapper.Bool, Condition);
 
     Label end = cg.ILG.DefineLabel();
-    Label falseLabel = IsVoid(desiredType) && IfFalse == null ? end : cg.ILG.DefineLabel();
-    ITypeInfo valueType = IfFalse == null ? desiredType : ValueType;
+    Label falseLabel = IsVoid(ContextType) && IfFalse == null ? end : cg.ILG.DefineLabel();
+    ITypeInfo valueType = IfFalse == null ? ContextType : ValueType;
 
     cg.ILG.Emit(OpCodes.Brfalse, falseLabel); // jump to the false branch (or end) if the condition is false
     cg.EmitTypedNode(IfTrue, valueType);      // emit the true branch
 
     // emit the false branch
-    if(!IsVoid(desiredType) || IfFalse != null)
+    if(!IsVoid(ContextType) || IfFalse != null)
     {
       cg.ILG.Emit(OpCodes.Br, end);
       cg.ILG.MarkLabel(falseLabel);
@@ -795,14 +833,14 @@ public class IfNode : ASTNode
       {
         cg.EmitTypedNode(IfFalse, valueType);
       }
-      else if(!IsVoid(desiredType))
+      else if(!IsVoid(ContextType))
       {
         cg.EmitDefault(valueType);
       }
     }
 
     cg.ILG.MarkLabel(end);
-    TailReturn(cg, valueType, ref desiredType);
+    return TailReturn(cg, valueType);
   }
 
   public override object Evaluate()
@@ -815,6 +853,14 @@ public class IfNode : ASTNode
     {
       return IfFalse == null ? null : IfFalse.Evaluate();
     }
+  }
+
+  public override void SetValueContext(ITypeInfo desiredType)
+  {
+    base.SetValueContext(desiredType);
+    TruthOperator.SetValueContext(TypeWrapper.Bool, Condition);
+    IfTrue.SetValueContext(ValueType);
+    if(IfFalse != null) IfFalse.SetValueContext(ValueType);
   }
 }
 #endregion
@@ -836,18 +882,16 @@ public class LiteralNode : ASTNode
     get { return CG.GetTypeInfo(Value); }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
     if(cached)
     {
       cg.EmitCachedConstant(Value);
-      TailReturn(cg, ValueType, ref desiredType);
+      return TailReturn(cg, ValueType);
     }
     else
     {
-      ITypeInfo type = desiredType;
-      cg.EmitConstant(Value, ref type);
-      TailReturn(cg, type, ref desiredType);
+      return TailReturn(cg, cg.EmitConstant(Value, ContextType));
     }
   }
 
@@ -855,7 +899,7 @@ public class LiteralNode : ASTNode
   {
     return Value;
   }
-  
+
   public readonly object Value;
   readonly bool cached;
 }
@@ -871,7 +915,7 @@ public abstract class NonExecutableNode : ASTNode
     get { throw new NotSupportedException(); }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
     throw new NotSupportedException();
   }
@@ -898,16 +942,20 @@ public class OpNode : ASTNode
     get { return Operator.GetValueType(Children); }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
-    ITypeInfo type = desiredType;
-    Operator.Emit(cg, Children, ref type);
-    TailReturn(cg, type, ref desiredType);
+    return TailReturn(cg, Operator.Emit(cg, ContextType, Children));
   }
 
   public override object Evaluate()
   {
     return Operator.Evaluate(Children);
+  }
+
+  public override void SetValueContext(ITypeInfo desiredType)
+  {
+    base.SetValueContext(desiredType);
+    Operator.SetValueContext(desiredType, Children);
   }
 
   public readonly Operator Operator;
@@ -939,10 +987,10 @@ public class OptionsNode : ASTNode
     }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
     CompilerState.Push(state);
-    try { Body.Emit(cg, ref desiredType); }
+    try { return Body.Emit(cg); }
     finally { CompilerState.Pop(); }
   }
 
@@ -955,7 +1003,20 @@ public class OptionsNode : ASTNode
 
   public override void MarkTail(bool tail)
   {
-    Body.MarkTail(tail);
+    CompilerState.Push(state);
+    try { Body.MarkTail(tail); }
+    finally { CompilerState.Pop(); }
+  }
+
+  public override void SetValueContext(ITypeInfo desiredType)
+  {
+    CompilerState.Push(state);
+    try
+    {
+      base.SetValueContext(desiredType);
+      Body.SetValueContext(desiredType);
+    }
+    finally { CompilerState.Pop(); }
   }
 
   CompilerState state;
@@ -1018,6 +1079,12 @@ public class ParameterNode : NonExecutableNode
   public FunctionNode Function
   {
     get { return parent == null ? null : (FunctionNode)parent.parent; }
+  }
+
+  public override void SetValueContext(ITypeInfo desiredType)
+  {
+    base.SetValueContext(desiredType);
+    if(DefaultValue != null) DefaultValue.SetValueContext(Type);
   }
 
   public readonly string Name;
@@ -1110,9 +1177,9 @@ public sealed class RuntimeCastNode : CastNode
 {
   public RuntimeCastNode(ITypeInfo type, ASTNode value) : base(type, value) { }
 
-  protected override void EmitCast(CodeGenerator cg, ITypeInfo typeOnStack, ITypeInfo desiredType)
+  protected override void EmitCast(CodeGenerator cg, ITypeInfo typeOnStack)
   {
-    cg.EmitRuntimeConversion(typeOnStack, desiredType);
+    cg.EmitRuntimeConversion(typeOnStack, ContextType);
   }
 }
 #endregion
@@ -1122,9 +1189,9 @@ public sealed class SafeCastNode : CastNode
 {
   public SafeCastNode(ITypeInfo type, ASTNode value) : base(type, value) { }
 
-  protected override void EmitCast(CodeGenerator cg, ITypeInfo typeOnStack, ITypeInfo desiredType)
+  protected override void EmitCast(CodeGenerator cg, ITypeInfo typeOnStack)
   {
-    cg.EmitSafeConversion(typeOnStack, desiredType);
+    cg.EmitSafeConversion(typeOnStack, ContextType);
   }
 }
 #endregion
@@ -1148,7 +1215,7 @@ public class ScriptFunctionNode : FunctionNode
     get { return TypeWrapper.Get(typeof(ICallableWithKeywords)); }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
     currentIndex = functionIndex.Next;
 
@@ -1156,8 +1223,12 @@ public class ScriptFunctionNode : FunctionNode
     IMethodInfo method = GetMethod(cg.Assembly);
 
     if(HasListParameter || HasDictParameter) throw new NotImplementedException(); // method wrappers won't handle this properly
-    
-    if(!IsVoid(desiredType))
+
+    if(IsVoid(ContextType))
+    {
+      return TailReturn(cg);
+    }
+    else
     {
       // create the function wrapper
       ITypeInfo wrapperType = cg.Assembly.GetMethodWrapper(method);
@@ -1165,10 +1236,8 @@ public class ScriptFunctionNode : FunctionNode
       cg.ILG.Emit(OpCodes.Ldftn, method.Method);
       cg.EmitBool(true); // isStatic
       cg.EmitNew(wrapperType, TypeWrapper.IntPtr, TypeWrapper.Bool);
-      cg.EmitRuntimeConversion(ValueType, desiredType);
+      return TailReturn(cg, wrapperType);
     }
-
-    TailReturn(cg, IsVoid(desiredType) ? desiredType : ValueType, ref desiredType);
   }
 
   public override object Evaluate()
@@ -1305,9 +1374,9 @@ public sealed class UnsafeCastNode : CastNode
 {
   public UnsafeCastNode(ITypeInfo type, ASTNode value) : base(type, value) { }
 
-  protected override void EmitCast(CodeGenerator cg, ITypeInfo typeOnStack, ITypeInfo desiredType)
+  protected override void EmitCast(CodeGenerator cg, ITypeInfo typeOnStack)
   {
-    cg.EmitUnsafeConversion(typeOnStack, desiredType);
+    cg.EmitUnsafeConversion(typeOnStack, ContextType);
   }
 }
 #endregion
@@ -1338,11 +1407,11 @@ public class VariableNode : AssignableNode
     }
   }
 
-  public override void Emit(CodeGenerator cg, ref ITypeInfo desiredType)
+  public override ITypeInfo Emit(CodeGenerator cg)
   {
     AssertValidSlot();
     Slot.EmitGet(cg);
-    TailReturn(cg, ValueType, ref desiredType);
+    return TailReturn(cg, Slot.Type);
   }
 
   public override void EmitSet(CodeGenerator cg, ASTNode valueNode)
