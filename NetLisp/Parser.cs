@@ -342,7 +342,7 @@ public class Parser : ParserBase
         switch(optionName)
         {
           case "checked":
-            if(value.Value is bool) state.Checked = (bool)value.Value;
+            if(value.Value is bool) state.Checked = state.PromoteOnOverflow = (bool)value.Value;
             else AddErrorMessage(string.Format("option '{0}' expects boolean value", optionName));
             break;
           default:

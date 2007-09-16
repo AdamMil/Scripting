@@ -116,7 +116,9 @@ public abstract class PrefixVisitor : ProcessorBase
     RecursiveVisit(rootNode);
   }
   
+  /// <returns>Returns true if the children of the node should be visited.</returns>
   protected abstract bool Visit(ASTNode node);
+
   protected virtual void EndVisit(ASTNode node) { }
 
   protected void RecursiveVisit(ASTNode node)
@@ -176,33 +178,6 @@ public enum Stage
 }
 #endregion
 
-#region TailMarker
-/// <summary>This processor simply calls <see cref="ASTNode.MarkTail"/> on the root node.</summary>
-public class TailMarkerStage : IASTProcessor
-{
-  /// <summary>Creates a tail marker stage with an initial tail value of true.</summary>
-  public TailMarkerStage() : this(true) { }
-
-  /// <summary>Creates a tail marker stage with the given initial tail value.</summary>
-  public TailMarkerStage(bool initialTail)
-  {
-    this.initialTail = initialTail;
-  }
-
-  public Stage Stage
-  {
-    get { return Stage.Decorate; }
-  }
-
-  public void Process(ref ASTNode rootNode)
-  {
-    rootNode.MarkTail(initialTail);
-  }
-  
-  readonly bool initialTail;
-}
-#endregion
-
 #region ASTDecorator
 public sealed class ASTDecorator
 {
@@ -242,6 +217,38 @@ public sealed class ASTDecorator
 public enum DecoratorType
 {
   Compiled, Interpreted
+}
+#endregion
+
+#region ContextMarkerStage
+/// <summary>This processor simply calls <see cref="ASTNode.MarkTail"/> and <see cref="ASTNode.SetValueContext"/>on the
+/// root node.
+/// </summary>
+public class ContextMarkerStage : IASTProcessor
+{
+  /// <summary>Creates a tail marker stage with an initial tail value of true.</summary>
+  public ContextMarkerStage() : this(Emit.TypeWrapper.Unknown, true) { }
+
+  /// <summary>Creates a tail marker stage with the given initial tail value.</summary>
+  public ContextMarkerStage(Emit.ITypeInfo initialContext, bool initialTail)
+  {
+    this.initialContext = initialContext;
+    this.initialTail    = initialTail;
+  }
+
+  public Stage Stage
+  {
+    get { return Stage.Decorate; }
+  }
+
+  public void Process(ref ASTNode rootNode)
+  {
+    rootNode.MarkTail(initialTail);
+    rootNode.SetValueContext(initialContext);
+  }
+
+  readonly Emit.ITypeInfo initialContext;
+  readonly bool initialTail;
 }
 #endregion
 
