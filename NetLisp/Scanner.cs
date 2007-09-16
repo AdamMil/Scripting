@@ -73,7 +73,7 @@ public class Scanner : ScannerBase
                 int ordinal = char.ToUpper(name[2]) - 64;
                 if(ordinal < 1 || ordinal > 26)
                 {
-                  AddErrorMessage(token.Start, "Invalid control code "+name);
+                  AddMessage(NetLispDiagnostics.InvalidControlCode, token.Start, name);
                   literal = '?'; // recover by giving an arbitrary value
                 }
                 else
@@ -120,7 +120,7 @@ public class Scanner : ScannerBase
                   case "rs":  literal = (char)30; break;
                   case "us": case "backnext": literal = (char)31; break;
                   default:
-                    AddErrorMessage(token.Start, "Unknown character name "+name);
+                    AddMessage(NetLispDiagnostics.UnknownCharacterName, token.Start, name);
                     literal = '?';
                     break;
                 }
@@ -167,7 +167,7 @@ public class Scanner : ScannerBase
               }
               else if(Char == 0)
               {
-                AddErrorMessage(token.Start, "unterminated string literal");
+                AddMessage(CoreDiagnostics.UnterminatedStringLiteral, token.Start);
                 break;
               }
               else
@@ -192,7 +192,7 @@ public class Scanner : ScannerBase
               if(NextChar() == '*' && NextChar() == '#') break;
               if(Char == 0)
               {
-                AddErrorMessage(token.Start, "unterminated extended comment");
+                AddMessage(CoreDiagnostics.UnterminatedComment, token.Start);
                 break;
               }
             }
@@ -204,7 +204,7 @@ public class Scanner : ScannerBase
             break;
         
           case '<':
-            AddErrorMessage(token.Start, "unable to read: #<...");
+            AddMessage(NetLispDiagnostics.EncounteredUnreadable, token.Start);
             while(true) // recover by skipping to the next (assuming the string looks like #<...>)
             {
               NextChar();
@@ -215,7 +215,7 @@ public class Scanner : ScannerBase
             break;
           
           default:
-            AddErrorMessage(token.Start, "unknown notation: #"+Char);
+            AddMessage(NetLispDiagnostics.UnknownNotation, token.Start, Char);
             while(!IsDelimiter(NextChar())) { }
             token.Type  = TokenString.Literal;
             token.Value = null;
@@ -241,7 +241,7 @@ public class Scanner : ScannerBase
           }
           else if(c == 0)
           {
-            AddErrorMessage(token.Start, "unterminated string literal");
+            AddMessage(CoreDiagnostics.UnterminatedStringLiteral, token.Start);
             break;
           }
           
@@ -359,7 +359,7 @@ public class Scanner : ScannerBase
           }
           else if((c<'A' || c>'F') && (c<'a' || c>'f'))
           {
-            if(i == 0) AddErrorMessage("expected hex digit");
+            if(i == 0) AddMessage(CoreDiagnostics.ExpectedHexDigit, Diagnostic.CharLiteral(c));
             RestoreState();
             break;
           }
@@ -375,7 +375,7 @@ public class Scanner : ScannerBase
         c = char.ToUpperInvariant(NextChar());
         if(c<'A' || c>'Z')
         {
-          AddErrorMessage(string.Format("expected letter, but received '{0}'", c));
+          AddMessage(CoreDiagnostics.ExpectedLetter, Diagnostic.CharLiteral(c));
           return '?';
         }
         else
@@ -384,7 +384,7 @@ public class Scanner : ScannerBase
         }
 
       default:
-        AddErrorMessage(string.Format("unknown escape character '{0}' (0x{1:X})", c, (ushort)c));
+        AddMessage(CoreDiagnostics.UnknownEscapeCharacter, c);
         return '?';
     }
   }

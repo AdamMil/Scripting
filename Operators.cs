@@ -243,6 +243,20 @@ public abstract class NumericOperator : NaryOperator
     }
   }
 
+  public override void SetValueContext(ITypeInfo opContextType, IList<ASTNode> nodes)
+  {
+    if(nodes.Count == 0) throw new ArgumentException();
+
+    ITypeInfo type = nodes[0].ValueType;
+    nodes[0].SetValueContext(type);
+
+    for(int nodeIndex=1; nodeIndex<nodes.Count; nodeIndex++)
+    {
+      type = GetValueType(type, nodes[nodeIndex].ValueType);
+      nodes[nodeIndex].SetValueContext(type);
+    }
+  }
+
   protected abstract void EmitOp(CodeGenerator cg, ITypeInfo typeOnStack, bool signed);
 
   protected bool NormalizeTypesOrCallOverload(ref object a, ref object b, out object value)

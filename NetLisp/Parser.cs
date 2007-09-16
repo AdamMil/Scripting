@@ -114,7 +114,7 @@ public class Parser : ParserBase
                 ret = new UnsafeCastNode(ParseType(), ParseExpression());
                 break;
 
-              case ".option":
+              case ".options":
                 ret = ParseOptions();
                 break;
 
@@ -191,7 +191,7 @@ public class Parser : ParserBase
         break;
 
       default:
-        AddErrorMessage(string.Format("Unexpected token '{0}'", token.Type));
+        AddMessage(CoreDiagnostics.UnexpectedToken, token.Type);
         NextToken();
         ret = new LiteralNode(null);
         break;
@@ -210,24 +210,6 @@ public class Parser : ParserBase
     return body;
   }
 
-  /// <summary>Adds a new error message using the current source name and position.</summary>
-  void AddErrorMessage(string message)
-  {
-    AddErrorMessage(token.SourceName, token.Start, message);
-  }
-
-  /// <summary>Adds a new error message using the current source name and the given position.</summary>
-  void AddErrorMessage(FilePosition position, string message)
-  {
-    AddErrorMessage(token.SourceName, position, message);
-  }
-
-  /// <summary>Adds a new error message using the current source name and the given position.</summary>
-  void AddErrorMessage(FilePosition position, string format, params object[] args)
-  {
-    AddErrorMessage(position, string.Format(format, args));
-  }
-
   void Consume(TokenType type)
   {
     Expect(type);
@@ -244,7 +226,8 @@ public class Parser : ParserBase
       }
       else
       {
-        throw SyntaxError("expected '{0}' but found '{1}'", type, token.Type);
+        AddExpectedMessage(type.ToString());
+        throw SyntaxError();
       }
     }
   }
@@ -303,23 +286,12 @@ public class Parser : ParserBase
       }
       else
       {
-        AddErrorMessage(string.Format("expected 'let' binding, but received '{0}'", token.Type));
+        AddExpectedMessage("let binding");
         if(!TokenIs(TokenType.RParen)) NextToken(); // attempt a lame recovery
       }
     } while(!TryConsume(TokenType.RParen));
 
-    ASTNode ret;
-    if(names.Count == 0)
-    {
-      AddErrorMessage(start, "'let' has no bindings");
-      ret = ParseBody();
-    }
-    else
-    {
-      ret = new LocalBindingNode(names.ToArray(), values.ToArray(), ParseBody());
-    }
-    
-    return ret;
+    return names.Count == 0 ? ParseBody() : new LocalBindingNode(names.ToArray(), values.ToArray(), ParseBody());
   }
 
   ASTNode ParseOptions()
@@ -328,34 +300,41 @@ public class Parser : ParserBase
 
     NextToken();
     Consume(TokenType.LParen); // start of the options
-    NetLispCompilerState state =
-      (NetLispCompilerState)CompilerState.Current.Language.CreateCompilerState(CompilerState.Current);
+    NetLispCompilerState state = (NetLispCompilerState)CompilerState.Language.CreateCompilerState(CompilerState);
 
     do // for each option
     {
-      if(TryConsume(TokenType.LParen)) // it's an option/value pair
+      if(!TryConsume(TokenType.LParen))
+      {
+        AddExpectedMessage("option pair");
+        if(!TokenIs(TokenType.RParen)) NextToken(); // attempt a lame recovery
+      }
+      else // it's an option/value pair
       {
         string optionName = ParseSymbolName();
         LiteralNode value = ParseOne() as LiteralNode;
-        if(value == null) AddErrorMessage("expected literal option value");
+        if(value == null) AddExpectedMessage("literal option value");
 
         switch(optionName)
         {
           case "checked":
             if(value.Value is bool) state.Checked = state.PromoteOnOverflow = (bool)value.Value;
-            else AddErrorMessage(string.Format("option '{0}' expects boolean value", optionName));
+            else AddMessage(NetLispDiagnostics.OptionExpects, optionName, "boolean");
+            break;
+          case "debug":
+            if(value.Value is bool) state.Debug = (bool)value.Value;
+            else AddMessage(NetLispDiagnostics.OptionExpects, optionName, "boolean");
+            break;
+          case "optimize":
+            if(value.Value is bool) state.Optimize = (bool)value.Value;
+            else AddMessage(NetLispDiagnostics.OptionExpects, optionName, "boolean");
             break;
           default:
-            AddErrorMessage(string.Format("unknown option '{0}'", optionName));
+            AddMessage(NetLispDiagnostics.UnknownOption, optionName);
             break;
         }
 
         Consume(TokenType.RParen);
-      }
-      else
-      {
-        AddErrorMessage(string.Format("expected '.option' binding, but received '{0}'", token.Type));
-        if(!TokenIs(TokenType.RParen)) NextToken(); // attempt a lame recovery
       }
     } while(!TryConsume(TokenType.RParen));
 
@@ -426,7 +405,8 @@ public class Parser : ParserBase
     }
     else
     {
-      throw SyntaxError(token.Start, "expected lambda type or parameter list");
+      AddExpectedMessage("return type or parameter list");
+      return new ParameterNode[0];
     }
   }
 
@@ -465,7 +445,7 @@ public class Parser : ParserBase
         Type type = Type.GetType(typeName);
         if(type == null)
         {
-          AddErrorMessage(string.Format("use of undeclared type '{0}'", typeName));
+          AddMessage(CoreDiagnostics.MissingName, typeName);
           return TypeWrapper.Object;
         }
         return TypeWrapper.Get(type);
@@ -484,7 +464,7 @@ public class Parser : ParserBase
     {
       if(!TokenIs(TokenType.Symbol))
       {
-        AddErrorMessage("expected symbol name in set!");
+        AddExpectedMessage("symbol");
         NextToken();
       }
       else
@@ -510,17 +490,25 @@ public class Parser : ParserBase
     return ret;
   }
 
-  SyntaxErrorException SyntaxError(string format, params object[] args)
+  void AddMessage(Diagnostic diagnostic, params object[] args)
   {
-    return SyntaxError(token.Start, format, args);
+    AddMessage(diagnostic, token.Start, args);
   }
 
-  SyntaxErrorException SyntaxError(FilePosition position, string format, params object[] args)
+  void AddMessage(Diagnostic diagnostic, FilePosition position, params object[] args)
   {
-    OutputMessage message = new OutputMessage(OutputMessageType.Error, string.Format(format, args),
-                                              token.SourceName, position);
-    AddMessage(message);
-    return new SyntaxErrorException(message);
+    CompilerState.Messages.Add(
+      diagnostic.ToMessage(CompilerState.TreatWarningsAsErrors, token.SourceName, position, args));
+  }
+
+  void AddExpectedMessage(string expected)
+  {
+    AddMessage(CoreDiagnostics.ExpectedSyntax, expected, token.Type);
+  }
+
+  SyntaxErrorException SyntaxError()
+  {
+    return new SyntaxErrorException(CompilerState.Messages[CompilerState.Messages.Count-1]);
   }
 
   bool TokenIs(TokenType type)
@@ -550,12 +538,13 @@ public class Parser : ParserBase
   {
     if(type == TokenType.EOF)
     {
-      throw SyntaxError("unexpected end of file");
+      AddMessage(CoreDiagnostics.UnexpectedEOF);
     }
     else
     {
-      throw SyntaxError("unexpected token '{0}'", token.Type);
+      AddMessage(CoreDiagnostics.UnexpectedToken, token.Type);
     }
+    throw SyntaxError();
   }
 
   FilePosition lastEndPosition;

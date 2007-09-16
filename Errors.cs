@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using Scripting.AST;
@@ -127,7 +128,7 @@ public class OutputMessage
     this.Message = message;
     this.Type    = type;
   }
-  
+
   public OutputMessage(OutputMessageType type, string message, string sourceName, FilePosition position)
     : this(type, message)
   {
@@ -181,6 +182,11 @@ public class OutputMessageCollection : Collection<OutputMessage>
     }
   }
 
+  public void Add(Diagnostic diagnostic, params object[] args)
+  {
+    Add(diagnostic.ToMessage(CompilerState.Current.TreatWarningsAsErrors, args));
+  }
+
   protected override void InsertItem(int index, OutputMessage item)
   {
     if(item == null) throw new ArgumentNullException(); // disallow null messages
@@ -195,4 +201,158 @@ public class OutputMessageCollection : Collection<OutputMessage>
 }
 #endregion
 
+#region Diagnostic
+/// <summary>This class represents a single diagnostic message, and contains static members for all valid messages.</summary>
+public struct Diagnostic
+{
+  public Diagnostic(OutputMessageType type, string prefix, int code, int level, string format)
+  {
+    if(code < 0 || code > 9999) throw new ArgumentOutOfRangeException(); // should be a 4-digit code
+    if(string.IsNullOrEmpty(format)) throw new ArgumentException();
+
+    this.type   = type;
+    this.prefix = prefix;
+    this.code   = code;
+    this.level  = level;
+    this.format = format;
+  }
+
+  /// <summary>Gets the string prefix placed before diagnostic code, to identify the system that output it.</summary>
+  public string Prefix
+  {
+    get { return prefix; }
+  }
+
+  /// <summary>The numeric code of this diagnostic message.</summary>
+  public int Code
+  {
+    get { return code; }
+  }
+
+  /// <summary>The level of the diagonostic, with higher levels representing less severe issues.</summary>
+  public int Level
+  {
+    get { return level; }
+  }
+
+  /// <summary>The format string for the diagnostic's message.</summary>
+  public string Format
+  {
+    get { return format; }
+  }
+
+  /// <summary>The type of diagnostic message.</summary>
+  public OutputMessageType Type
+  {
+    get { return type; }
+  }
+
+  /// <summary>Converts this diagnostic to an <see cref="OutputMessage"/>.</summary>
+  /// <param name="treatWarningAsError">Whether a warning should be treated as an error.</param>
+  /// <param name="args">Arguments to use when formatting the diagnostic's message.</param>
+  public OutputMessage ToMessage(bool treatWarningAsError, params object[] args)
+  {
+    return ToMessage(treatWarningAsError, "<unknown>", new FilePosition(), args);
+  }
+
+  /// <summary>Converts this diagnostic to an <see cref="OutputMessage"/>.</summary>
+  /// <param name="treatWarningAsError">Whether a warning should be treated as an error.</param>
+  /// <param name="sourceName">The name of the source file to which the diagnostic applies.</param>
+  /// <param name="position">The position within the source file of the construct that caused the diagnostic.</param>
+  /// <param name="args">Arguments to use when formatting the diagnostic's message.</param>
+  public OutputMessage ToMessage(bool treatWarningAsError,
+                                 string sourceName, FilePosition position, params object[] args)
+  {
+    OutputMessageType type = this.type == OutputMessageType.Warning && treatWarningAsError
+      ? OutputMessageType.Error : this.type;
+    return new OutputMessage(type, ToString(treatWarningAsError, args), sourceName, position);
+  }
+
+  /// <summary>Converts this diagnostic to a message suitable for use in an <see cref="OutputMessage"/>.</summary>
+  /// <param name="treatWarningAsError">Whether a warning should be treated as an error.</param>
+  /// <param name="args">Arguments to use when formatting the diagnostic's message.</param>
+  public string ToString(bool treatWarningAsError, params object[] args)
+  {
+    string typeString;
+    if(type == OutputMessageType.Error || treatWarningAsError && type == OutputMessageType.Warning)
+    {
+      typeString = "error";
+    }
+    else if(type == OutputMessageType.Warning)
+    {
+      typeString = "warning";
+    }
+    else
+    {
+      typeString = "information";
+    }
+
+    return string.Format(CultureInfo.InvariantCulture, "{0} {1}{2:D4}: {3}", typeString, prefix, code,
+                         string.Format(format, args));
+  }
+
+  readonly string prefix, format;
+  readonly OutputMessageType type;
+  readonly int code, level;
+
+  /// <summary>Returns a name for the given character suitable for insertion between single quotes.</summary>
+  public static string CharLiteral(char c)
+  {
+    switch(c)
+    {
+      case '\'': return @"\'";
+      case '\0': return @"\0";
+      case '\a': return @"\a";
+      case '\b': return @"\b";
+      case '\f': return @"\f";
+      case '\n': return @"\n";
+      case '\r': return @"\r";
+      case '\t': return @"\t";
+      case '\v': return @"\v";
+      default:
+        return c < 32 || c > 126 ? "0x"+((int)c).ToString("X") : new string(c, 1);
+    }
+  }
+
+  public static Diagnostic MakeError(string prefix, int code, string format)
+  {
+    return new Diagnostic(OutputMessageType.Error, prefix, code, 0, format);
+  }
+
+  public static Diagnostic MakeWarning(string prefix, int code, int level, string format)
+  {
+    return new Diagnostic(OutputMessageType.Warning, prefix, code, 1, format);
+  }
+}
+#endregion
+
+#region CoreDiagnostics
+public static class CoreDiagnostics
+{
+  public static readonly Diagnostic InternalCompilerError     = Error(1, "Internal compiler error: {0}");
+  // scanner
+  public static readonly Diagnostic ExpectedHexDigit          = Error(1001, "Expected hex digit, but received '{0}'");
+  public static readonly Diagnostic ExpectedLetter            = Error(1002, "Expected letter, but received '{0}'");
+  public static readonly Diagnostic UnknownEscapeCharacter    = Error(1003, "Unknown escape character '{0}'");
+  public static readonly Diagnostic UnterminatedComment       = Error(1004, "Unterminated multiline comment");
+  public static readonly Diagnostic UnterminatedStringLiteral = Error(1005, "Unterminated string literal");
+  public static readonly Diagnostic UnexpectedCharacter       = Error(1006, "Unexpected character '{0}'");
+  public static readonly Diagnostic UnexpectedEOF             = Error(1007, "Unexpected end of file");
+  // parser
+  public static readonly Diagnostic UnexpectedToken           = Error(1101, "Syntax error, unexpected token '{0}'");
+  public static readonly Diagnostic ExpectedSyntax            = Error(1102, "Syntax error, expected '{0}' but received '{1}'");
+  // semantics
+  public static readonly Diagnostic MissingName               = Error(1201, "The name '{0}' does not exist in the current context");
+
+  static Diagnostic Error(int code, string format)
+  {
+    return Diagnostic.MakeError("CORE", code, format);
+  }
+
+  static Diagnostic Warning(int code, int level, string format)
+  {
+    return Diagnostic.MakeWarning("CORE", code, level, format);
+  }
+}
+#endregion
 } // namespace Scripting

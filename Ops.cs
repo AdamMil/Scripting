@@ -100,18 +100,18 @@ public static class Ops
     return binding;
   }
 
-  public static ICallable ConvertToCallable(object obj)
+  public static ICallable ConvertToICallable(object obj)
   {
     ICallable call = obj as ICallable;
     if(call != null) return call;
     
     Delegate del = obj as Delegate;
-    if(del != null) return MakeCallable(del);
+    if(del != null) return MakeICallable(del);
 
     throw CantConvert(obj, typeof(ICallable));
   }
 
-  public static ICallable MakeCallable(Delegate del)
+  public static ICallable MakeICallable(Delegate del)
   {
     throw new NotImplementedException();
   }

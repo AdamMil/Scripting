@@ -43,6 +43,8 @@ public class CompilerState
   /// Enabling this option will result in less-efficient generated code, because the type of generated 
   /// </summary>
   public bool PromoteOnOverflow;
+  /// <summary>Whether warnings will be treated as errors.</summary>
+  public bool TreatWarningsAsErrors;
 
   /// <summary>Pushes a new compler state onto the stack using the language and options of the current state. The
   /// message collection will be reused for the new state, allowing messages added to either state to show up in both.

@@ -52,16 +52,11 @@ public abstract class ParserBase : IParser
     get { return scanner; }
   }
 
-  /// <summary>Adds an output message to <see cref="CompilerState"/>.</summary>
-  protected virtual void AddMessage(OutputMessage message)
-  {
-    CompilerState.Messages.Add(message);
-  }
-
   /// <summary>Adds a new error message using the given source name and position.</summary>
-  protected void AddErrorMessage(string sourceName, FilePosition position, string message)
+  protected void AddMessage(Diagnostic diagnostic, string sourceName, FilePosition position, params object[] args)
   {
-    AddMessage(new OutputMessage(OutputMessageType.Error, message, sourceName, position));
+    CompilerState.Messages.Add(
+      diagnostic.ToMessage(CompilerState.TreatWarningsAsErrors, sourceName, position, args));
   }
 
   readonly IScanner scanner;
