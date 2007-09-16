@@ -337,7 +337,16 @@ public abstract class ASTNode
     return nodes.ToArray();
   }
 
-  public virtual void CheckSemantics() { }
+  public void AddMessage(Diagnostic diagnostic, params object[] args)
+  {
+    CompilerState.Current.Messages.Add(
+      diagnostic.ToMessage(CompilerState.Current.TreatWarningsAsErrors, SourceName, StartPosition, args));
+  }
+
+  public virtual void CheckSemantics()
+  {
+    //if(!CG.IsConvertibleTo(ValueType, ContextType)) 
+  }
 
   public virtual object Evaluate()
   {
@@ -373,13 +382,16 @@ public abstract class ASTNode
   /// </summary>
   protected ITypeInfo TailReturn(CodeGenerator cg)
   {
-    if(!IsInTry)
+    if(IsTail)
     {
-      cg.EmitReturn();
-    }
-    else
-    {
-      throw new NotImplementedException(); // TODO: implement leave from try blocks
+      if(!IsInTry)
+      {
+        cg.EmitReturn();
+      }
+      else
+      {
+        throw new NotImplementedException(); // TODO: implement leave from try blocks
+      }
     }
     return ContextType;
   }
@@ -884,6 +896,8 @@ public class LiteralNode : ASTNode
 
   public override ITypeInfo Emit(CodeGenerator cg)
   {
+    if(IsVoid(ContextType)) return TailReturn(cg);
+
     if(cached)
     {
       cg.EmitCachedConstant(Value);
@@ -914,6 +928,8 @@ public abstract class NonExecutableNode : ASTNode
   {
     get { throw new NotSupportedException(); }
   }
+
+  public override void CheckSemantics() { }
 
   public override ITypeInfo Emit(CodeGenerator cg)
   {
@@ -1224,7 +1240,7 @@ public class ScriptFunctionNode : FunctionNode
 
     if(HasListParameter || HasDictParameter) throw new NotImplementedException(); // method wrappers won't handle this properly
 
-    if(IsVoid(ContextType))
+    if(CompilerState.Current.Optimize && IsVoid(ContextType))
     {
       return TailReturn(cg);
     }
@@ -1410,6 +1426,8 @@ public class VariableNode : AssignableNode
   public override ITypeInfo Emit(CodeGenerator cg)
   {
     AssertValidSlot();
+    if(CompilerState.Current.Optimize && IsVoid(ContextType)) return TailReturn(cg);
+
     Slot.EmitGet(cg);
     return TailReturn(cg, Slot.Type);
   }

@@ -889,12 +889,12 @@ public class CodeGenerator
             }
             else if(i >= long.MinValue && i <= long.MaxValue)
             {
-              EmitConstant(Integer.ToInt64(i));
+              EmitLong(Integer.ToInt64(i));
               EmitNew(typeof(Integer), typeof(long));
             }
             else if(i >= ulong.MinValue && i <= ulong.MaxValue)
             {
-              EmitConstant(Integer.ToUInt64(i));
+              EmitLong((long)Integer.ToUInt64(i));
               EmitNew(typeof(Integer), typeof(ulong));
             }
             else
@@ -1401,7 +1401,7 @@ public class CodeGenerator
       // check for some built-in types and emit smaller code for them
       if(destinationType == TypeWrapper.ICallable)
       {
-        EmitCall(typeof(Ops), "ConvertToCallable");
+        EmitCall(typeof(Ops), "ConvertToICallable");
       }
       else // fall back to the general case conversion function if necessary
       {
@@ -1558,9 +1558,15 @@ public class CodeGenerator
   public void EmitVoid(ASTNode node)
   {
     ITypeInfo type = node.Emit(this);
+
     if(type != TypeWrapper.Void)
     {
-      throw new CompileTimeException("Node emitted in a void context must not visibly alter the stack.");
+      if(CompilerState.Current.Optimize)
+      {
+        throw new CompileTimeException("Node emitted in a void context must not visibly alter the stack when "+
+                                       "optimizations are enabled.");
+      }
+      EmitPop();
     }
   }
   

@@ -382,7 +382,7 @@ public sealed class CallNode : ASTNode
 
   public override object Evaluate()
   {
-    return Ops.ConvertToCallable(Function.Evaluate()).Call(ASTNode.EvaluateNodes(Arguments));
+    return Ops.ConvertToICallable(Function.Evaluate()).Call(ASTNode.EvaluateNodes(Arguments));
   }
 
   public override void SetValueContext(ITypeInfo desiredType)

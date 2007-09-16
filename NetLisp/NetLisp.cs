@@ -31,13 +31,13 @@ namespace NetLisp
  * 
  * Setting compiler options:
  *    (lambda (([int] a) ([int] b))
- *      (.option ((optimisticOperatorInlining #f))
+ *      (.options ((optimisticOperatorInlining #f))
  *        (+ a b))) ; this + will not be inlined, because we're assuming that the user may have overridden it
  *    
  *    (define addWithOverflow
  *      (lambda (a b) (.option ((checked #f)) (+ a b)))) ; this addition can overflow silently
  * 
- *    (.option ((allowRedefinition #f) (checked #f) (debug #f) (optimisticOperatorInlining #t))
+ *    (.options ((allowRedefinition #f) (checked #f) (debug #f) (optimisticOperatorInlining #t))
  *      (define 1+ (lambda (a) (+ a 1)))  ; these functions will be as fast as possible
  *      (define 1- (lambda (a) (- a 1))))
  */
@@ -136,6 +136,30 @@ public sealed class NetLispLanguage : Language
   }
 
   public static readonly NetLispLanguage Instance = new NetLispLanguage();
+}
+#endregion
+
+#region NetLispDiagnostic
+public static class NetLispDiagnostics
+{
+  // scanner
+  public static readonly Diagnostic InvalidControlCode    = Error(1501, "Invalid control code '{0}'");
+  public static readonly Diagnostic UnknownCharacterName  = Error(1502, "Invalid character name '{0}'");
+  public static readonly Diagnostic EncounteredUnreadable = Error(1503, "Unable to read: #<...");
+  public static readonly Diagnostic UnknownNotation       = Error(1504, "Unknown notation #{0}");
+  // parser
+  public static readonly Diagnostic OptionExpects         = Error(1551, "Option '{0}' expects {1} value");
+  public static readonly Diagnostic UnknownOption         = Error(1552, "Unknown option '{0}'");
+
+  static Diagnostic Error(int code, string format)
+  {
+    return Diagnostic.MakeError("NL", code, format);
+  }
+
+  static Diagnostic Warning(int code, int level, string format)
+  {
+    return Diagnostic.MakeWarning("NL", code, level, format);
+  }
 }
 #endregion
 

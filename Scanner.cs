@@ -197,28 +197,23 @@ public abstract class ScannerBase : IScanner
     }
   }
 
-  /// <summary>Adds an output message to <see cref="CompilerState"/>.</summary>
-  protected virtual void AddMessage(OutputMessage message)
+  /// <summary>Adds a new message using the current source name and position.</summary>
+  protected void AddMessage(Diagnostic diagnostic, params object[] args)
   {
-    CompilerState.Messages.Add(message);
-  }
-  
-  /// <summary>Adds a new error message using the current source name and position.</summary>
-  protected void AddErrorMessage(string message)
-  {
-    AddErrorMessage(SourceName, Position, message);
+    AddMessage(diagnostic, SourceName, Position, args);
   }
 
-  /// <summary>Adds a new error message using the current source name and the given position.</summary>
-  protected void AddErrorMessage(FilePosition position, string message)
+  /// <summary>Adds a new message using the current source name and the given position.</summary>
+  protected void AddMessage(Diagnostic diagnostic, FilePosition position, params object[] args)
   {
-    AddErrorMessage(SourceName, position, message);
+    AddMessage(diagnostic, SourceName, position, args);
   }
 
   /// <summary>Adds a new error message using the given source name and position.</summary>
-  protected void AddErrorMessage(string sourceName, FilePosition position, string message)
+  protected void AddMessage(Diagnostic diagnostic, string sourceName, FilePosition position, params object[] args)
   {
-    AddMessage(new OutputMessage(OutputMessageType.Error, message, sourceName, position));
+    CompilerState.Messages.Add(
+      diagnostic.ToMessage(CompilerState.TreatWarningsAsErrors, sourceName, position, args));
   }
 
   /// <summary>Loads the next source data source if there currently is none.</summary>

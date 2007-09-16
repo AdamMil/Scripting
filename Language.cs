@@ -87,7 +87,7 @@ public abstract class Language
     }
     catch(Exception e)
     {
-      CompilerState.Current.Messages.Add(new OutputMessage(OutputMessageType.Error, e.Message));
+      CompilerState.Current.Messages.Add(CoreDiagnostics.InternalCompilerError, e.Message);
       return null;
     }
   }
