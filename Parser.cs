@@ -30,7 +30,7 @@ public interface IParser
 
 #region ParserBase
 /// <summary>A simple base class for parsers.</summary>
-public abstract class ParserBase : IParser
+public abstract class ParserBase<CompilerStateType> : IParser where CompilerStateType : CompilerState
 {
   protected ParserBase(IScanner scanner)
   {
@@ -42,9 +42,9 @@ public abstract class ParserBase : IParser
   public abstract ASTNode ParseOne();
   public abstract ASTNode ParseExpression();
 
-  protected CompilerState CompilerState
+  protected CompilerStateType CompilerState
   {
-    get { return CompilerState.Current; }
+    get { return (CompilerStateType)Scripting.CompilerState.Current; }
   }
 
   protected IScanner Scanner

@@ -649,30 +649,33 @@ public class TypeWrapper : ITypeInfo
 
   static readonly Dictionary<Type, TypeWrapper> wrappers = new Dictionary<Type, TypeWrapper>();
 
-  public static readonly TypeWrapper Bool    = Get(typeof(bool));
-  public static readonly TypeWrapper Byte    = Get(typeof(byte));
-  public static readonly TypeWrapper SByte   = Get(typeof(sbyte));
-  public static readonly TypeWrapper Short   = Get(typeof(short));
-  public static readonly TypeWrapper UShort  = Get(typeof(ushort));
-  public static readonly TypeWrapper Char    = Get(typeof(char));
-  public static readonly TypeWrapper Int     = Get(typeof(int));
-  public static readonly TypeWrapper UInt    = Get(typeof(uint));
-  public static readonly TypeWrapper Long    = Get(typeof(long));
-  public static readonly TypeWrapper ULong   = Get(typeof(ulong));
-  public static readonly TypeWrapper Decimal = Get(typeof(decimal));
-  public static readonly TypeWrapper Integer = Get(typeof(Runtime.Integer));
-  public static readonly TypeWrapper Single  = Get(typeof(float));
-  public static readonly TypeWrapper Double  = Get(typeof(double));
-  public static readonly TypeWrapper Complex = Get(typeof(Runtime.Complex));
-  public static readonly TypeWrapper String  = Get(typeof(string));
-  public static readonly TypeWrapper Object  = Get(typeof(object));
-  public static readonly TypeWrapper IntPtr  = Get(typeof(IntPtr));
-  public static readonly TypeWrapper Void    = Get(typeof(void));
+  public static readonly TypeWrapper Bool     = Get(typeof(bool));
+  public static readonly TypeWrapper Byte     = Get(typeof(byte));
+  public static readonly TypeWrapper SByte    = Get(typeof(sbyte));
+  public static readonly TypeWrapper Short    = Get(typeof(short));
+  public static readonly TypeWrapper UShort   = Get(typeof(ushort));
+  public static readonly TypeWrapper Char     = Get(typeof(char));
+  public static readonly TypeWrapper Int      = Get(typeof(int));
+  public static readonly TypeWrapper UInt     = Get(typeof(uint));
+  public static readonly TypeWrapper Long     = Get(typeof(long));
+  public static readonly TypeWrapper ULong    = Get(typeof(ulong));
+  public static readonly TypeWrapper Decimal  = Get(typeof(decimal));
+  public static readonly TypeWrapper Integer  = Get(typeof(Runtime.Integer));
+  public static readonly TypeWrapper Single   = Get(typeof(float));
+  public static readonly TypeWrapper Double   = Get(typeof(double));
+  public static readonly TypeWrapper Complex  = Get(typeof(Runtime.Complex));
+  public static readonly TypeWrapper Rational = Get(typeof(Runtime.Rational));
+  public static readonly TypeWrapper String   = Get(typeof(string));
+  public static readonly TypeWrapper Object   = Get(typeof(object));
+  public static readonly TypeWrapper IntPtr   = Get(typeof(IntPtr));
+  public static readonly TypeWrapper Void     = Get(typeof(void));
 
-  /// <summary>A type representing variables whose type is not known. Automatic runtime conversion may be applied to
+  /// <summary>A type representing values whose type is not known. Automatic runtime conversion may be applied to
   /// values of unknown types, but otherwise it behaves like <see cref="Object"/>.
   /// </summary>
   public static readonly TypeWrapper Unknown = new TypeWrapper(typeof(object));
+  /// <summary>An invalid type.</summary>
+  public static readonly TypeWrapper Invalid = new TypeWrapper(typeof(void));
 
   public static readonly TypeWrapper ICallable    = Get(typeof(Runtime.ICallable));
   public static readonly TypeWrapper TopLevel     = Get(typeof(Runtime.TopLevel));

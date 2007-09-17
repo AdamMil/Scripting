@@ -21,6 +21,7 @@ public abstract class Operator
 
   public readonly string Name;
 
+  public abstract void CheckSemantics(ITypeInfo opContextType, IList<ASTNode> nodes);
   public abstract ITypeInfo Emit(CodeGenerator cg, ITypeInfo desiredType, IList<ASTNode> nodes);
   public abstract void EmitThisOperator(CodeGenerator cg);
   public abstract object Evaluate(IList<ASTNode> nodes);
@@ -61,6 +62,12 @@ public abstract class UnaryOperator : Operator
 {
   protected UnaryOperator(string name) : base(name) { }
 
+  public override void CheckSemantics(ITypeInfo opContextType, IList<ASTNode> nodes)
+  {
+    if(nodes.Count != 1) CompilerState.Current.Messages.Add(CoreDiagnostics.WrongOperatorArity, Name, 1, nodes.Count);
+    CheckSemantics(opContextType, nodes[0]);
+  }
+
   public override ITypeInfo Emit(CodeGenerator cg, ITypeInfo desiredType, IList<ASTNode> nodes)
   {
     if(nodes.Count != 1) throw new ArgumentException();
@@ -85,6 +92,7 @@ public abstract class UnaryOperator : Operator
     SetValueContext(opContextType, nodes[0]);
   }
 
+  public abstract void CheckSemantics(ITypeInfo opContextType, ASTNode node);
   public abstract ITypeInfo Emit(CodeGenerator cg, ITypeInfo desiredType, ASTNode node);
   public abstract object Evaluate(object obj);
   public abstract ITypeInfo GetValueType(ASTNode node);
@@ -117,6 +125,21 @@ public abstract class NumericOperator : NaryOperator
   public enum Options
   {
     None=0, Checked=1, Promote=2
+  }
+
+  public override void CheckSemantics(ITypeInfo opContextType, IList<ASTNode> nodes)
+  {
+    ITypeInfo type = nodes[0].ValueType;
+    for(int nodeIndex=1; nodeIndex<nodes.Count; nodeIndex++)
+    {
+      type = GetValueType(type, nodes[nodeIndex].ValueType);
+      if(type == TypeWrapper.Invalid)
+      {
+        nodes[nodeIndex-1].AddMessage(CoreDiagnostics.CannotApplyOperator2, Name,
+                             CG.TypeName(nodes[nodeIndex-1].ValueType), CG.TypeName(nodes[nodeIndex].ValueType));
+        break;
+      }
+    }
   }
 
   public sealed override void EmitThisOperator(CodeGenerator cg)
@@ -231,6 +254,10 @@ public abstract class NumericOperator : NaryOperator
     {
       type = GetValueType(type, nodes[nodeIndex].ValueType);
     }
+    
+    // if the type is invalid, it will be caught by the semantic checker later, or the runtime checker. we'll return
+    // 'unknown' now to avoid leaking the Invalid type into the rest of the system where it's not expected
+    if(type == TypeWrapper.Invalid) type = TypeWrapper.Unknown;
 
     // with promotion enabled, we can never be sure of what type we'll return (if it's a primitive type)
     if(CompilerState.Current.Checked && CompilerState.Current.PromoteOnOverflow && CG.IsPrimitiveNumeric(type))
@@ -253,7 +280,9 @@ public abstract class NumericOperator : NaryOperator
     for(int nodeIndex=1; nodeIndex<nodes.Count; nodeIndex++)
     {
       type = GetValueType(type, nodes[nodeIndex].ValueType);
-      nodes[nodeIndex].SetValueContext(type);
+      // if the type is invalid, it will be caught by the semantic checker later, or the runtime checker. we'll use
+      // 'unknown' here to avoid leaking the Invalid type into the rest of the system where it's not expected
+      nodes[nodeIndex].SetValueContext(type == TypeWrapper.Invalid ? TypeWrapper.Unknown : type);
     }
   }
 
@@ -394,7 +423,11 @@ public abstract class NumericOperator : NaryOperator
   {
     ITypeInfo type;
 
-    if(CG.IsPrimitiveNumeric(lhs.DotNetType) && CG.IsPrimitiveNumeric(rhs.DotNetType)) // if they're primitive numerics
+    if(lhs == TypeWrapper.Unknown || rhs == TypeWrapper.Unknown) // if either type is unknown
+    {
+      type = TypeWrapper.Unknown; // we'll invoke the runtime function, which returns an unknown type
+    }
+    else if(CG.IsPrimitiveNumeric(lhs.DotNetType) && CG.IsPrimitiveNumeric(rhs.DotNetType)) // if they're primitive numerics
     {
       type = GetTypeForPrimitiveNumerics(lhs, rhs);
     }
@@ -416,7 +449,7 @@ public abstract class NumericOperator : NaryOperator
         }
         else
         {
-          type = TypeWrapper.Unknown; // as a last resort we'll invoke the runtime function, which returns an unknown type
+          type = TypeWrapper.Invalid;
         }
       }
     }
@@ -520,6 +553,11 @@ public sealed class LogicalTruthOperator : UnaryOperator
     }
 
     return type;
+  }
+
+  public override void CheckSemantics(ITypeInfo opContextType, ASTNode node)
+  {
+    if(node.ValueType == TypeWrapper.Void) node.AddMessage(CoreDiagnostics.ExpectedValue);
   }
 
   public override void EmitThisOperator(CodeGenerator cg)

@@ -362,6 +362,15 @@ public sealed class CallNode : ASTNode
     }
   }
 
+  public override void CheckSemantics()
+  {
+    VariableNode functionVar = Function as VariableNode;
+    if(functionVar != null && ShouldInline(functionVar.Name))
+    {
+      GetBuiltinFunctionOperator(functionVar.Name).CheckSemantics(ContextType, Arguments);
+    }
+  }
+
   public override ITypeInfo Emit(CodeGenerator cg)
   {
     VariableNode functionVar = Function as VariableNode;
@@ -394,15 +403,7 @@ public sealed class CallNode : ASTNode
     VariableNode functionVar = Function as VariableNode;
     if(functionVar != null && ShouldInline(functionVar.Name))
     {
-      switch(functionVar.Name)
-      {
-        case "+": Operator.Add.SetValueContext(desiredType, Arguments); break;
-        case "-": Operator.Subtract.SetValueContext(desiredType, Arguments); break;
-        case "*": Operator.Multiply.SetValueContext(desiredType, Arguments); break;
-        case "/": Operator.Divide.SetValueContext(desiredType, Arguments); break;
-        case "modulo": Operator.Modulus.SetValueContext(desiredType, Arguments); break;
-        default: throw new NotImplementedException();
-      }
+      GetBuiltinFunctionOperator(functionVar.Name).SetValueContext(desiredType, Arguments);
     }
     else
     {
@@ -412,28 +413,23 @@ public sealed class CallNode : ASTNode
 
   ITypeInfo EmitBuiltinFunction(CodeGenerator cg, string name)
   {
-    ITypeInfo type = ContextType;
-    switch(name)
-    {
-      case "+": type = Operator.Add.Emit(cg, type, Arguments); break;
-      case "-": type = Operator.Subtract.Emit(cg, type, Arguments); break;
-      case "*": type = Operator.Multiply.Emit(cg, type, Arguments); break;
-      case "/": type = Operator.Divide.Emit(cg, type, Arguments); break;
-      case "modulo": type = Operator.Modulus.Emit(cg, type, Arguments); break;
-      default: throw new NotImplementedException();
-    }
-    return TailReturn(cg, type);
+    return TailReturn(cg, GetBuiltinFunctionOperator(name).Emit(cg, ContextType, Arguments));
   }
 
   ITypeInfo GetBuiltinFunctionType(string name)
   {
+    return GetBuiltinFunctionOperator(name).GetValueType(Arguments);
+  }
+
+  NumericOperator GetBuiltinFunctionOperator(string name)
+  {
     switch(name)
     {
-      case "+": return Operator.Add.GetValueType(Arguments);
-      case "-": return Operator.Subtract.GetValueType(Arguments);
-      case "*": return Operator.Multiply.GetValueType(Arguments);
-      case "/": return Operator.Divide.GetValueType(Arguments);
-      case "modulo": return Operator.Add.GetValueType(Arguments);
+      case "+": return Operator.Add;
+      case "-": return Operator.Subtract;
+      case "*": return Operator.Multiply;
+      case "/": return Operator.Divide;
+      case "modulo": return Operator.Add;
       default: throw new NotImplementedException();
     }
   }
@@ -601,6 +597,7 @@ public sealed class LocalBindingNode : ASTNode
     public override void SetValueContext(ITypeInfo desiredType)
     {
       base.SetValueContext(desiredType);
+      Variable.SetValueContext(TypeWrapper.Unknown); // the variable will never be retrieved, only set
       if(InitialValue != null) InitialValue.SetValueContext(Variable.ValueType);
     }
 
@@ -639,8 +636,9 @@ public sealed class LocalBindingNode : ASTNode
       }
     }
     
-    return Body.Emit(cg);
+    ITypeInfo emittedType = Body.Emit(cg);
     cg.EndScope();
+    return emittedType;
   }
 
   public override object Evaluate()

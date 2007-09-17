@@ -21,34 +21,38 @@ public static class CG
     // integer types are convertible to larger integer types.
     numericConversions = new SortedList<ITypeInfo,ITypeInfo[]>(10, TypeComparer.Instance);
     numericConversions[TypeWrapper.SByte] = new ITypeInfo[]
-      { TypeWrapper.Short, TypeWrapper.Int, TypeWrapper.Long, TypeWrapper.Integer,
-        TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
+      { TypeWrapper.Short, TypeWrapper.Int, TypeWrapper.Long, TypeWrapper.Integer, TypeWrapper.Double,
+        TypeWrapper.Single, TypeWrapper.Decimal, TypeWrapper.Complex, TypeWrapper.Rational,
       };
     numericConversions[TypeWrapper.Byte] = new ITypeInfo[]
       { TypeWrapper.Short, TypeWrapper.UShort, TypeWrapper.Int, TypeWrapper.UInt, TypeWrapper.Long, TypeWrapper.ULong,
-        TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
+        TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal, TypeWrapper.Complex,
+        TypeWrapper.Rational,
       };
     numericConversions[TypeWrapper.Short] = new ITypeInfo[]
       { TypeWrapper.Int, TypeWrapper.Long, TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single,
-        TypeWrapper.Decimal
+        TypeWrapper.Decimal, TypeWrapper.Complex, TypeWrapper.Rational,
       };
     numericConversions[TypeWrapper.UShort] = new ITypeInfo[]
       { TypeWrapper.Int, TypeWrapper.UInt, TypeWrapper.Long, TypeWrapper.ULong, TypeWrapper.Integer,
-        TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
+        TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal, TypeWrapper.Complex, TypeWrapper.Rational,
       };
     numericConversions[TypeWrapper.Int] = new ITypeInfo[]
-      { TypeWrapper.Long, TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
+      { TypeWrapper.Long, TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal,
+        TypeWrapper.Complex, TypeWrapper.Rational,
       };
     numericConversions[TypeWrapper.UInt] = new ITypeInfo[]
-      { TypeWrapper.Long, TypeWrapper.ULong, TypeWrapper.Integer,
-        TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
+      { TypeWrapper.Long, TypeWrapper.ULong, TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single,
+        TypeWrapper.Decimal, TypeWrapper.Complex, TypeWrapper.Rational,
       };
     numericConversions[TypeWrapper.Long] = new ITypeInfo[]
-      { TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal
+      { TypeWrapper.Integer, TypeWrapper.Complex, TypeWrapper.Rational, TypeWrapper.Double, TypeWrapper.Single,
+        TypeWrapper.Decimal
       };
     numericConversions[TypeWrapper.ULong] = numericConversions[TypeWrapper.Long];
     numericConversions[TypeWrapper.Char] = numericConversions[TypeWrapper.UShort];
-    numericConversions[TypeWrapper.Single] = new ITypeInfo[] { TypeWrapper.Double };
+    numericConversions[TypeWrapper.Single] =
+      new ITypeInfo[] { TypeWrapper.Double, TypeWrapper.Complex, TypeWrapper.Rational };
   }
 
   public static ITypeInfo GetCommonBaseType(ASTNode a, ASTNode b)
@@ -247,6 +251,43 @@ public static class CG
     return false;
   }
 
+  /// <summary>Returns true if a value of type <paramref name="from"/> can be converted to a value of type
+  /// <paramref name="to"/> by <see cref="CodeGenerator.EmitConversion"/>. If <paramref name="from"/> is
+  /// <see cref="TypeWrapper.Unknown"/>, the conversion is always assumed to succeed.
+  /// </summary>
+  public static bool IsConvertible(ITypeInfo from, ITypeInfo to)
+  {
+    return from == TypeWrapper.Unknown ? true : IsSafelyConvertible(from, to);
+  }
+
+  /// <summary>Returns true if a value of type <paramref name="from"/> can be converted to a value of type
+  /// <paramref name="to"/> by <see cref="CodeGenerator.EmitSafeConversion"/>.
+  /// </summary>
+  public static bool IsSafelyConvertible(ITypeInfo from, ITypeInfo to)
+  {
+    // REMEMBER TO KEEP THESE CHECKS IN SYNC WITH CodeGenerator.TryEmitSafeConversion
+
+    if(HasImplicitConversion(from, to)) return true; // it's safely convertible if there's an implicit conversion
+    if(from == null) return !to.IsValueType; // null can be converted to reference types
+    if(to == TypeWrapper.Void) return true; // if converting to 'void', we simply pop the value from the stack
+
+    // if both types are primitives, we may be able to use the built-in conversion opcodes
+    if(from.DotNetType.IsPrimitive && to.DotNetType.IsPrimitive)
+    {
+      switch(to.TypeCode)
+      {
+        case TypeCode.Boolean: case TypeCode.SByte: case TypeCode.Byte: case TypeCode.Char: case TypeCode.Int16:
+        case TypeCode.UInt16: case TypeCode.Int32: case TypeCode.UInt32: case TypeCode.Int64: case TypeCode.UInt64:
+        case TypeCode.Single: case TypeCode.Double:
+          return true;
+        default:
+          return false;
+      }
+    }
+
+    return false;
+  }
+
   public static bool IsFloatingPoint(Type type)
   {
     return type == typeof(double) || type == typeof(float);
@@ -264,7 +305,8 @@ public static class CG
 
   public static bool IsNumeric(Type type)
   {
-    return IsPrimitiveNumeric(type) || type == typeof(decimal) || type == typeof(Integer) || type == typeof(Complex);
+    return IsPrimitiveNumeric(type) || type == typeof(decimal) || type == typeof(Integer) || type == typeof(Complex) ||
+      type == typeof(Rational);
   }
 
   public static bool IsPrimitiveNumeric(Type type)
@@ -338,6 +380,11 @@ public static class CG
       default:
         throw new ArgumentException();
     }
+  }
+
+  public static string TypeName(Emit.ITypeInfo typeInfo)
+  {
+    return typeInfo == Emit.TypeWrapper.Unknown ? "unknown" : Ops.TypeName(typeInfo.DotNetType);
   }
 
   internal static void SetCustomAttribute(MemberInfo info, CustomAttributeBuilder attributeBuilder)
@@ -1708,6 +1755,8 @@ public class CodeGenerator
 
   public bool TryEmitSafeConversion(ITypeInfo typeOnStack, ITypeInfo destType, bool checkOverflow)
   {
+    // REMEMBER TO KEEP THESE CHECKS IN SYNC WITH CG.IsSafelyConvertible
+
     // the destination type cannot be null, although the source type can.
     if(destType == null) throw new ArgumentNullException();
     if(typeOnStack == destType) return true; // if the types are the same, no work needs to be done
@@ -1826,13 +1875,13 @@ public class CodeGenerator
       return true;
     }
 
-    // see about conversion from primitive numerics to Decimal and Integer
+    // see about conversion from primitive numerics to Decimal, Complex, Integer, and Rational
     if(CG.IsPrimitiveNumeric(typeOnStack) && CG.IsNumeric(destType))
     {
-      // both Decimal and Integer have constructors that take float, double, int, uint, long, and ulong, except
-      // that Integer is lacking float
-      if(typeOnStack == TypeWrapper.Single && destType == TypeWrapper.Integer) // convert float to double for Integer
-      {
+      // all non-primitive numerics recognized by CG.IsNumeric have constructors that take double, int, uint, long, and
+      // ulong, and Decimal also accepts float
+      if(typeOnStack == TypeWrapper.Single && destType != TypeWrapper.Decimal) // convert float to double for
+      {                                                                        // non-Decimal numeric types
         ILG.Emit(OpCodes.Conv_R8);
         typeOnStack = TypeWrapper.Double;
       }

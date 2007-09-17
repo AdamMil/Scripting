@@ -345,7 +345,10 @@ public abstract class ASTNode
 
   public virtual void CheckSemantics()
   {
-    //if(!CG.IsConvertibleTo(ValueType, ContextType)) 
+    if(!CG.IsConvertible(ValueType, ContextType))
+    {
+      AddMessage(CoreDiagnostics.CannotConvertType, CG.TypeName(ValueType), CG.TypeName(ContextType));
+    }
   }
 
   public virtual object Evaluate()
@@ -525,6 +528,7 @@ public abstract class ASTNode
 public abstract class AssignableNode : ASTNode
 {
   public AssignableNode(bool isContainerNode) : base(isContainerNode) { }
+  public abstract bool IsSameSlotAs(ASTNode rhs);
   public abstract void EvaluateSet(object newValue);
   public abstract void EmitSet(CodeGenerator cg, ASTNode valueNode);
   public abstract void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack);
@@ -555,6 +559,13 @@ public class AssignNode : ASTNode
     get { return RHS.ValueType; }
   }
 
+  public override void CheckSemantics()
+  {
+    base.CheckSemantics();
+
+    if(LHS.IsSameSlotAs(RHS)) AddMessage(CoreDiagnostics.VariableAssignedToSelf);
+  }
+
   public override ITypeInfo Emit(CodeGenerator cg)
   {
     if(IsVoid(ContextType))
@@ -581,6 +592,7 @@ public class AssignNode : ASTNode
   public override void SetValueContext(ITypeInfo desiredType)
   {
     base.SetValueContext(desiredType);
+    LHS.SetValueContext(TypeWrapper.Unknown); // the LHS won't be read, only written
     RHS.SetValueContext(LHS.ValueType);
   }
 }
@@ -956,6 +968,12 @@ public class OpNode : ASTNode
   public override ITypeInfo ValueType
   {
     get { return Operator.GetValueType(Children); }
+  }
+
+  public override void CheckSemantics()
+  {
+    base.CheckSemantics();
+    Operator.CheckSemantics(ContextType, Children);
   }
 
   public override ITypeInfo Emit(CodeGenerator cg)
@@ -1455,7 +1473,14 @@ public class VariableNode : AssignableNode
     AssertValidSlot();
     Slot.EvaluateSet(newValue);
   }
-  
+
+  public override bool IsSameSlotAs(ASTNode rhs)
+  {
+    AssertValidSlot();
+    VariableNode rhsVar = rhs as VariableNode;
+    return rhsVar != null && Slot.IsSameAs(rhsVar.Slot);
+  }
+
   void AssertValidSlot()
   {
     if(Slot == null)

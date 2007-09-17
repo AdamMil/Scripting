@@ -15,7 +15,7 @@
 .namespace Scripting.Runtime
 {
 
-.class public auto ansi sealed LowLevel
+.class public sealed auto ansi LowLevel
 {
   .method public static hidebysig float32 FloatRemainder(float32 a, float32 b) cil managed
   {
