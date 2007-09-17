@@ -331,28 +331,35 @@ public static class CoreDiagnostics
 {
   public static readonly Diagnostic InternalCompilerError     = Error(1, "Internal compiler error: {0}");
   // scanner
-  public static readonly Diagnostic ExpectedHexDigit          = Error(1001, "Expected hex digit, but received '{0}'");
-  public static readonly Diagnostic ExpectedLetter            = Error(1002, "Expected letter, but received '{0}'");
-  public static readonly Diagnostic UnknownEscapeCharacter    = Error(1003, "Unknown escape character '{0}'");
-  public static readonly Diagnostic UnterminatedComment       = Error(1004, "Unterminated multiline comment");
-  public static readonly Diagnostic UnterminatedStringLiteral = Error(1005, "Unterminated string literal");
-  public static readonly Diagnostic UnexpectedCharacter       = Error(1006, "Unexpected character '{0}'");
-  public static readonly Diagnostic UnexpectedEOF             = Error(1007, "Unexpected end of file");
+  public static readonly Diagnostic ExpectedHexDigit          = Error(51, "Expected hex digit, but received '{0}'");
+  public static readonly Diagnostic ExpectedLetter            = Error(52, "Expected letter, but received '{0}'");
+  public static readonly Diagnostic UnknownEscapeCharacter    = Error(53, "Unknown escape character '{0}'");
+  public static readonly Diagnostic UnterminatedComment       = Error(54, "Unterminated multiline comment");
+  public static readonly Diagnostic UnterminatedStringLiteral = Error(55, "Unterminated string literal");
+  public static readonly Diagnostic UnexpectedCharacter       = Error(56, "Unexpected character '{0}'");
+  public static readonly Diagnostic UnexpectedEOF             = Error(57, "Unexpected end of file");
   // parser
-  public static readonly Diagnostic UnexpectedToken           = Error(1101, "Syntax error, unexpected token '{0}'");
-  public static readonly Diagnostic ExpectedSyntax            = Error(1102, "Syntax error, expected '{0}' but received '{1}'");
+  public static readonly Diagnostic UnexpectedToken           = Error(101, "Syntax error, unexpected token '{0}'");
+  public static readonly Diagnostic ExpectedSyntax            = Error(102, "Syntax error, expected '{0}' but received '{1}'");
   // semantics
-  public static readonly Diagnostic MissingName               = Error(1201, "The name '{0}' does not exist in the current context");
+  public static readonly Diagnostic MissingName               = Error(201, "The name '{0}' does not exist in the current context");
+  public static readonly Diagnostic CannotConvertType         = Error(202, "Cannot convert type '{0}' to '{1}'");
+  public static readonly Diagnostic WrongOperatorArity        = Error(203, "Operator '{0}' expects {1} arguments but was given {2}");
+  public static readonly Diagnostic ExpectedValue             = Error(204, "A value was expected");
+  public static readonly Diagnostic CannotApplyOperator       = Error(205, "Operator '{0}' cannot be applied to values of type '{1}'");
+  public static readonly Diagnostic CannotApplyOperator2      = Error(205, "Operator '{0}' cannot be applied to values of type '{1}' and '{2}'");
+
+  public static readonly Diagnostic VariableAssignedToSelf    = Warning(1001, "Variable assigned to itself; did you mean to assign something else?");
 
   static Diagnostic Error(int code, string format)
   {
     return Diagnostic.MakeError("CORE", code, format);
   }
 
-  static Diagnostic Warning(int code, int level, string format)
+  static Diagnostic Warning(int code, string format)
   {
-    return Diagnostic.MakeWarning("CORE", code, level, format);
-  }
+    return Diagnostic.MakeWarning("CORE", code, code/1000, format); // the warning level is implied by the first digit
+  }                                                                 // of the 4-digit code
 }
 #endregion
 } // namespace Scripting

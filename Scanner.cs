@@ -75,7 +75,7 @@ public interface IScanner
 /// <remarks>You are not required to use this class when you implement scanners. This class exists only to provide a
 /// part of the <see cref="IScanner"/> implementation.
 /// </remarks>
-public abstract class ScannerBase : IScanner
+public abstract class ScannerBase<CompilerStateType> : IScanner where CompilerStateType : CompilerState
 {
   /// <summary>
   /// Initializes the scanner with a list of source names. The source files will be loaded based on these names.
@@ -160,9 +160,9 @@ public abstract class ScannerBase : IScanner
   }
 
   /// <summary>Gets the compiler state passed to the constructor.</summary>
-  protected CompilerState CompilerState
+  protected CompilerStateType CompilerState
   {
-    get { return CompilerState.Current; }
+    get { return (CompilerStateType)Scripting.CompilerState.Current; }
   }
 
   /// <summary>Gets whether a source is loaded and whether <see cref="Source"/>, <see cref="SourceName"/>, etc are

@@ -41,6 +41,8 @@
     <Compile Include="Errors.cs" />
     <Compile Include="Integer.cs" />
     <Compile Include="Language.cs" />
+    <Compile Include="Modules.cs" />
+    <Compile Include="Namespaces.cs" />
     <Compile Include="Operators.cs" />
     <Compile Include="Ops.cs" />
     <Compile Include="Options.cs" />

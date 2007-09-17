@@ -14,7 +14,7 @@ enum TokenType
   Literal, Symbol, Vector, LParen, RParen, LBracket, RBracket, LCurly, RCurly, Quote, BackQuote, Period, EOF
 }
 
-public class Parser : ParserBase
+public class Parser : ParserBase<NetLispCompilerState>
 {
   public Parser(IScanner scanner) : base(scanner)
   {
@@ -302,7 +302,7 @@ public class Parser : ParserBase
     Consume(TokenType.LParen); // start of the options
     NetLispCompilerState state = (NetLispCompilerState)CompilerState.Language.CreateCompilerState(CompilerState);
 
-    do // for each option
+    while(!TryConsume(TokenType.RParen))
     {
       if(!TryConsume(TokenType.LParen))
       {
@@ -336,7 +336,7 @@ public class Parser : ParserBase
 
         Consume(TokenType.RParen);
       }
-    } while(!TryConsume(TokenType.RParen));
+    } 
 
     return new OptionsNode(state, ParseBody());
   }

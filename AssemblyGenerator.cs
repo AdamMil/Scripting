@@ -154,7 +154,7 @@ public sealed class AssemblyGenerator
   }
 
   /// <summary>Creates an <see cref="ICallable"/> type that will invoke the given method. If the method is not static
-  /// and is not a constructor, the 'this' pointer must be passed as the first argument when calling the wrapper.
+  /// or a constructor or a delegate, the 'this' pointer must be passed as the first argument when calling the wrapper.
   /// </summary>
   public ITypeInfo GetMethodWrapper(IMethodBase method)
   {

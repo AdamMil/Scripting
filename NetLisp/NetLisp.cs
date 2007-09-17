@@ -108,8 +108,8 @@ public sealed class NetLispLanguage : Language
     if(type == DecoratorType.Compiled)
     {
       decorator.AddToEndOfStage(new VariableSlotResolver(type));
-      decorator.AddToEndOfStage(new ContextMarkerStage());
     }
+    decorator.AddToEndOfStage(new ContextMarkerStage());
     decorator.AddToEndOfStage(new CoreSemanticChecker(type));
 
     return decorator;
@@ -143,13 +143,13 @@ public sealed class NetLispLanguage : Language
 public static class NetLispDiagnostics
 {
   // scanner
-  public static readonly Diagnostic InvalidControlCode    = Error(1501, "Invalid control code '{0}'");
-  public static readonly Diagnostic UnknownCharacterName  = Error(1502, "Invalid character name '{0}'");
-  public static readonly Diagnostic EncounteredUnreadable = Error(1503, "Unable to read: #<...");
-  public static readonly Diagnostic UnknownNotation       = Error(1504, "Unknown notation #{0}");
+  public static readonly Diagnostic InvalidControlCode    = Error(501, "Invalid control code '{0}'");
+  public static readonly Diagnostic UnknownCharacterName  = Error(502, "Invalid character name '{0}'");
+  public static readonly Diagnostic EncounteredUnreadable = Error(503, "Unable to read: #<...");
+  public static readonly Diagnostic UnknownNotation       = Error(504, "Unknown notation #{0}");
   // parser
-  public static readonly Diagnostic OptionExpects         = Error(1551, "Option '{0}' expects {1} value");
-  public static readonly Diagnostic UnknownOption         = Error(1552, "Unknown option '{0}'");
+  public static readonly Diagnostic OptionExpects         = Error(551, "Option '{0}' expects {1} value");
+  public static readonly Diagnostic UnknownOption         = Error(552, "Unknown option '{0}'");
 
   static Diagnostic Error(int code, string format)
   {

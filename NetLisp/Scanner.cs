@@ -16,7 +16,7 @@ static class TokenString
                       Quote="QUOTE", BackQuote="BACKQUOTE", Period="PERIOD";
 }
 
-public class Scanner : ScannerBase
+public class Scanner : ScannerBase<NetLispCompilerState>
 {
   public Scanner(params string[] sourceNames) : base(sourceNames) { }
   public Scanner(params TextReader[] sources) : base(sources) { }

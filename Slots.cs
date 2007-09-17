@@ -83,6 +83,8 @@ public abstract class Slot
     EvaluateTypedSet(Ops.ConvertTo(newValue, Type.DotNetType));
   }
 
+  public abstract bool IsSameAs(Slot other);
+
   /// <summary>In interpreted execution, evaluates the slot to set the value given an instance of type
   /// <see cref="Type"/> (or null, for nullable types).
   /// </summary>
@@ -182,6 +184,12 @@ public sealed class ArraySlot : Slot
   {
     Array array = (Array)Array.EvaluateGet();
     array.SetValue(newValue, Index);
+  }
+
+  public override bool IsSameAs(Slot other)
+  {
+    ArraySlot otherArray = other as ArraySlot;
+    return otherArray != null && Array.IsSameAs(otherArray.Array) && Index == otherArray.Index;
   }
 
   public readonly Slot Array;
@@ -293,6 +301,11 @@ public sealed class ClosureSlot : Slot
     }
   }
 
+  public override bool IsSameAs(Slot other)
+  {
+    throw new NotImplementedException();
+  }
+
   Slot GetFieldSlot(CodeGenerator cg)
   {
     if(fieldSlot == null)
@@ -392,7 +405,13 @@ public sealed class InterpretedLocalSlot : InterpretedSlot
   {
     InterpreterEnvironment.Current.Set(name, newValue);
   }
-  
+
+  public override bool IsSameAs(Slot other)
+  {
+    InterpretedLocalSlot otherSlot = other as InterpretedLocalSlot;
+    return otherSlot != null && string.Equals(name, otherSlot.name, StringComparison.Ordinal);
+  }
+
   readonly string name;
   readonly ITypeInfo type;
 }
@@ -499,6 +518,12 @@ public sealed class FieldSlot : Slot
     Field.Field.SetValue(Instance == null ? null : Instance.EvaluateGet(), newValue);
   }
 
+  public override bool IsSameAs(Slot other)
+  {
+    FieldSlot otherField = other as FieldSlot;
+    return otherField != null && Instance.IsSameAs(otherField.Instance) && Field.Field == otherField.Field;
+  }
+
   public readonly IFieldInfo Field;
   public readonly Slot Instance;
 }
@@ -564,6 +589,12 @@ public sealed class LocalSlot : Slot
   {
     cg.EmitConversion(typeOnStack, Type);
     cg.ILG.Emit(OpCodes.Stloc, builder);
+  }
+
+  public override bool IsSameAs(Slot other)
+  {
+    LocalSlot otherSlot = other as LocalSlot;
+    return otherSlot != null && builder == otherSlot.builder;
   }
 
   readonly LocalBuilder builder;
@@ -638,6 +669,12 @@ public sealed class LocalProxySlot : Slot
       slot = cg.AllocLocalVariable(name, type);
     }
     return slot;
+  }
+
+  public override bool IsSameAs(Slot other)
+  {
+    LocalProxySlot otherSlot = other as LocalProxySlot;
+    return otherSlot != null && string.Equals(name, otherSlot.name, StringComparison.Ordinal);
   }
 
   readonly string name;
@@ -747,6 +784,12 @@ public sealed class ParameterSlot : Slot
     }
   }
 
+  public override bool IsSameAs(Slot other)
+  {
+    ParameterSlot otherSlot = other as ParameterSlot;
+    return otherSlot != null && ArgIndex == otherSlot.ArgIndex;
+  }
+
   /// <summary>Gets whether the parameter is passed by reference.</summary>
   bool IsByRef
   {
@@ -804,6 +847,11 @@ public sealed class ThisSlot : Slot
   {
     cg.EmitConversion(typeOnStack, Type);
     cg.ILG.Emit(OpCodes.Starg, 0);
+  }
+
+  public override bool IsSameAs(Slot other)
+  {
+    return other is ThisSlot;
   }
 
   readonly ITypeInfo type;
@@ -882,6 +930,12 @@ public sealed class TopLevelSlot : Slot
     cg.EmitTypedSlot(valueSlot, type);
     cg.EmitSafeConversion(type, TypeWrapper.Object);
     cg.EmitFieldSet(valueField);
+  }
+
+  public override bool IsSameAs(Slot other)
+  {
+    TopLevelSlot otherSlot = other as TopLevelSlot;
+    return otherSlot != null && string.Equals(Name, otherSlot.Name, StringComparison.Ordinal);
   }
 
   public readonly string Name;
