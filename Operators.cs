@@ -200,7 +200,7 @@ public abstract class NumericOperator : NaryOperator
         EmitOp(cg, type, true);
         lhs = type;
       }
-      else // at least one type is a non-primitive, or we need to check for promotion
+      else // at least one type is a non-primitive, or the result may be promoted to another type
       {
         // if we got here because a type is non-primitive, then check overloads and implicit conversions...
         if(!autoPromote || !CG.IsPrimitiveNumeric(ltc) || !CG.IsPrimitiveNumeric(rtc))

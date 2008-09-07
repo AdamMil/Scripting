@@ -19,10 +19,10 @@ public static class LispTypes
 }
 #endregion
 
-#region CoreSemanticChecker
-public class CoreSemanticChecker : PrefixVisitor
+#region TopLevelScopeDecorator
+public sealed class TopLevelScopeDecorator : PrefixVisitor
 {
-  public CoreSemanticChecker(DecoratorType type) : base(type) { }
+  public TopLevelScopeDecorator(DecoratorType type) : base(type) { }
 
   public override Stage Stage
   {
@@ -31,21 +31,46 @@ public class CoreSemanticChecker : PrefixVisitor
 
   public override void Process(ref ASTNode rootNode)
   {
+    scope = new LexicalScope();
     base.Process(ref rootNode);
   }
 
   protected override bool Visit(ASTNode node)
   {
-    node.CheckSemantics();
-    return true;
+    node.Scope = scope;
+
+    DefineNode def = node as DefineNode;
+    if(def != null)
+    {
+      string varName = def.Variable.Name;
+      Symbol oldSymbol = scope.Get(varName);
+      bool allowRedefinition = ((NetLispCompilerState)CurrentOptions).AllowRedefinition;
+
+      if(oldSymbol == null)
+      {
+        // TODO: warn if redefining a builtin and the compiler is assuming builtins aren't redefined
+        def.LHS.IsReadOnly = !allowRedefinition;
+        def.RHS.Scope      = scope;
+
+        scope = new LexicalScope(scope);
+        scope.Add(varName, new Symbol(def.Variable, def.RHS));
+      }
+      else if(!allowRedefinition) AddMessage(CoreDiagnostics.VariableRedefined, node, varName);
+
+      def.LHS.Scope = scope;
+    }
+
+    return node is BlockNode || node is OptionsNode;
   }
+
+  LexicalScope scope;
 }
 #endregion
 
-#region VariableSlotResolver
-public class VariableSlotResolver : PrefixVisitor
+#region ScopeDecorator
+public class ScopeDecorator : PrefixVisitor
 {
-  public VariableSlotResolver(DecoratorType type) : base(type) { }
+  public ScopeDecorator(DecoratorType type) : base(type) { }
 
   public override Stage Stage
   {
@@ -54,26 +79,18 @@ public class VariableSlotResolver : PrefixVisitor
 
   protected override bool Visit(ASTNode node)
   {
+    if(node.Scope == null && node.ParentNode != null) node.Scope = node.ParentNode.Scope;
+
     if(node is VariableNode) // if it's a variable node, set its slot if necessary
     {
-      Binding binding = bindings[UpdateBinding((VariableNode)node)].Value;
+      VariableNode var = (VariableNode)node;
+      Binding binding = bindings[UpdateBinding(var)].Value;
       binding.Usage |= Usage.Read; // mark that this variable has been read
-      // if it hasn't been written or initialized, mark that it was read before it had a value
+
+      // if it hasn't been written or initialized, note that it was read before it was assigned a value
       if((binding.Usage & (Usage.Initialized|Usage.Written)) == 0)
       {
-        binding.Usage |= Usage.ReadBeforeInitialized;
-      }
-    }
-    else if(node is AssignNode)
-    {
-      AssignNode assign = (AssignNode)node;
-      VariableNode var = assign.LHS as VariableNode;
-
-      if(var != null) // if assigning to a variable, mark the variable as having been written to
-      {
-        RecursiveVisit(assign.RHS); // visit the right side first to so we can mark ReadBeforeInitialized for "var a=a"
-        bindings[UpdateBinding(var)].Value.Usage |= Usage.Written;
-        return false;
+        AddMessage(CoreDiagnostics.UnassignedVariableUsed, node, var.Name);
       }
     }
     else if(node is LocalBindingNode) // if it's a binding node, add the bound variables to the array
@@ -83,16 +100,18 @@ public class VariableSlotResolver : PrefixVisitor
       // first visit the initial values, since they'll be executed before the binding takes place
       foreach(LocalBindingNode.Binding binding in bind.Bindings)
       {
+        binding.Scope = binding.Variable.Scope = bind.Scope;
         if(binding.InitialValue != null) RecursiveVisit(binding.InitialValue);
       }
 
       // now add the new bindings
+      bind.Body.Scope = new LexicalScope(bind.Scope);
       foreach(LocalBindingNode.Binding binding in bind.Bindings)
       {
-        Slot slot = IsCompiled ? new LocalProxySlot(binding.Name, binding.Type)
-                               : (Slot)new InterpretedLocalSlot(binding.Name, binding.Type);
-        bindings.Add(new KeyValuePair<string,Binding>(binding.Name, new Binding(slot, false)));
-        UpdateBinding(binding.Variable);
+        Slot slot = IsCompiled ? (Slot)new LocalProxySlot(binding.Name, binding.Type)
+                               : new InterpretedLocalSlot(binding.Name, binding.Type);
+        bindings.Add(new KeyValuePair<string,Binding>(binding.Name, new Binding(binding.Variable, slot, false)));
+        bind.Body.Scope.Add(binding.Name, new Symbol(binding.Variable));
       }
 
       RecursiveVisit(bind.Body); // process the body of the 'let'
@@ -101,6 +120,41 @@ public class VariableSlotResolver : PrefixVisitor
       bindings.RemoveRange(bindings.Count-bind.Bindings.Count, bind.Bindings.Count);
       return false;
     }
+    else if(node is DefineNode)
+    {
+      DefineNode def = (DefineNode)node;
+
+      RecursiveVisit(def.RHS);
+
+      if(functions == null || functions.Count == 0) // it's a top-level definition
+      {
+        int index = UpdateBinding(def.Variable);
+
+        if(!((NetLispCompilerState)CurrentOptions).AllowRedefinition)
+        {
+          bindings[index].Value.UpdateSlot(new StaticTopLevelSlot(def.Variable.Name, def.RHS.ValueType));
+        }
+      }
+      else // the definition was not found at the top level
+      {
+        AddMessage(NetLispDiagnostics.UnexpectedDefine, node);
+      }
+
+      return false;
+    }
+    else if(node is AssignNode)
+    {
+      AssignNode assign = (AssignNode)node;
+      VariableNode var = assign.LHS as VariableNode;
+
+      if(var != null) // if assigning to a variable, mark the variable as having been written to
+      {
+        assign.LHS.Scope = assign.Scope;
+        RecursiveVisit(assign.RHS); // visit the right side first to so we catch "var a=a" as an error
+        bindings[UpdateBinding(var)].Value.Usage |= Usage.Written;
+        return false;
+      }
+    }
     else if(node is FunctionNode)
     {
       FunctionNode func = (FunctionNode)node;
@@ -108,33 +162,35 @@ public class VariableSlotResolver : PrefixVisitor
       // first visit the default parameter values, since they'll be executed outside the function body
       foreach(ParameterNode param in func.Parameters)
       {
+        param.Scope = param.Variable.Scope = func.Scope;
         if(param.DefaultValue != null) RecursiveVisit(param.DefaultValue);
       }
 
-      // in compiled mode, we need to keep track of where the function declarations start, so we can tell if a variable
+      // we need to keep track of where the function declarations start, so we can tell if a variable
       // is used outside of its function and needs to be included in a closure.
-      if(IsCompiled)
-      {
-        if(functions == null) functions = new List<Function>();
-        functions.Add(new Function(bindings.Count));
-      }
+      if(functions == null) functions = new List<Function>();
+      functions.Add(new Function(bindings.Count));
 
       // now add the new bindings
+      func.Body.Scope = new LexicalScope(func.Scope);
       foreach(ParameterNode param in func.Parameters)
       {
-        Slot slot = IsCompiled ? new ParameterSlot(param.Index, param.Type)
-                               : (Slot)new InterpretedLocalSlot(param.Name, param.Type);
-        bindings.Add(new KeyValuePair<string,Binding>(param.Name, new Binding(slot, true)));
+        Slot slot = IsCompiled ? (Slot)new ParameterSlot(param.Index, param.Type)
+                               : new InterpretedLocalSlot(param.Name, param.Type);
+        bindings.Add(new KeyValuePair<string,Binding>(param.Name, new Binding(param.Variable, slot, true)));
+        func.Body.Scope.Add(param.Name, new Symbol(param.Variable));
       }
 
       RecursiveVisit(func.Body); // process the body of the function
 
-      if(IsCompiled) // in compiled mode, we need to tell the function what closures it has so it can create a
-      {              // closure class if necessary. we also need to calculate closure depth for each reference.
-        Function function = functions[functions.Count-1];
-        functions.RemoveAt(functions.Count-1);
+      Function function = functions[functions.Count-1];
+      functions.RemoveAt(functions.Count-1);
 
-        if(function.Closures != null) // the function defines a closure
+      // in compiled mode, we need to tell the function what closures it has so it can create a
+      // closure class if necessary. we also need to calculate closure depth for each variable reference.
+      if(IsCompiled)
+      {
+        if(function.Closures != null) // if the function defines a closure
         {
           System.Collections.Specialized.ListDictionary depths = new System.Collections.Specialized.ListDictionary();
           List<string> names = new List<string>();
@@ -143,7 +199,7 @@ public class VariableSlotResolver : PrefixVisitor
           for(int i=0; i<function.Closures.Count; i++)
           {
             Binding binding     = function.Closures[i];
-            ClosureSlot closure = (ClosureSlot)binding.Slot;
+            ClosureSlot closure = (ClosureSlot)binding.Declaration.Slot;
             func.Closures[i]    = closure;
 
             // uniquify slot names if necessary
@@ -166,18 +222,29 @@ public class VariableSlotResolver : PrefixVisitor
               FunctionNode referencingFunction = var.GetAncestor<FunctionNode>();
               if(referencingFunction != func) // if the variable defining this reference is not the current function,
               {                               // the slot does not have a depth of zero. calculate the depth.
-                FunctionNode funcNode = referencingFunction;
                 int depth = 1;
-                while(funcNode != node)
+                for(FunctionNode funcNode = referencingFunction; funcNode != node;
+                    funcNode = funcNode.GetAncestor<FunctionNode>())
                 {
                   if(funcNode.CreatesClosure) depth++;
-                  funcNode = funcNode.GetAncestor<FunctionNode>();
                 }
 
                 // create a new slot with the right depth if necessary, or retrieve a cached one.
                 ClosureSlot slot = (ClosureSlot)depths[depth];
                 if(slot == null) depths[depth] = slot = closure.CloneWithDepth(depth);
                 var.Slot = slot;
+
+                // now update the maximum closure reference depths for all the functions between the variable
+                // declaration and use
+                for(FunctionNode funcNode = referencingFunction; depth > 1 && funcNode != node;
+                    funcNode = funcNode.GetAncestor<FunctionNode>())
+                {
+                  if(funcNode.CreatesClosure)
+                  {
+                    depth--;
+                    funcNode.MaxClosureReferenceDepth = Math.Max(funcNode.MaxClosureReferenceDepth, depth);
+                  }
+                }
               }
             }
             
@@ -196,10 +263,11 @@ public class VariableSlotResolver : PrefixVisitor
 
   sealed class Binding
   {
-    public Binding(Slot slot, bool preInitialized)
+    public Binding(VariableNode decl, Slot slot, bool preInitialized)
     {
-      this.Slot  = slot;
-      this.Usage = preInitialized ? Usage.Initialized : Usage.None;
+      Declaration = decl;
+      Declaration.Slot = slot;
+      Usage = preInitialized ? Usage.Initialized : Usage.None;
     }
 
     public void AddReference(VariableNode var)
@@ -208,7 +276,17 @@ public class VariableSlotResolver : PrefixVisitor
       References.Add(var);
     }
 
-    public Slot Slot;
+    public void UpdateSlot(Slot slot)
+    {
+      Declaration.Slot = slot;
+
+      if(References != null)
+      {
+        foreach(VariableNode reference in References) reference.Slot = slot;
+      }
+    }
+
+    public VariableNode Declaration;
     public List<VariableNode> References;
     public Usage Usage;
     public bool  InClosure;
@@ -245,15 +323,13 @@ public class VariableSlotResolver : PrefixVisitor
     /// example of this kind of binding.
     /// </summary>
     Initialized=4,
-    /// <summary>The binding was read before it was written to or initialized.</summary>
-    ReadBeforeInitialized=8
   }
 
-  int FindBinding(VariableNode var)
+  int FindBinding(string name)
   {
     for(int i=bindings.Count-1; i>=0; i--)
     {
-      if(string.Equals(var.Name, bindings[i].Key, StringComparison.Ordinal))
+      if(string.Equals(name, bindings[i].Key, StringComparison.Ordinal))
       {
         return i;
       }
@@ -272,29 +348,23 @@ public class VariableSlotResolver : PrefixVisitor
 
   int UpdateBinding(VariableNode var)
   {
-    int index = FindBinding(var); // see if this variable has been defined before
+    int index = FindBinding(var.Name); // see if this variable has been defined before
     if(index != -1)
     {
       Binding binding = bindings[index].Value;
 
-      if(var.Slot == null) var.Slot = binding.Slot; // update the variable slot to use the binding slot
+      if(var.Slot == null) var.Slot = binding.Declaration.Slot; // update the variable slot to use the binding slot
       binding.AddReference(var);
 
       // if the slot is defined in a function other than the current function, and it's not already in a closure,
       // we need to make it into a closure slot. this doesn't take into account closure depth. that's done after
       // the processing for the function is complete.
-      if(!binding.InClosure && functions != null && functions.Count > 1 && !(binding.Slot is TopLevelSlot) &&
+      if(!binding.InClosure && functions != null && functions.Count > 1 &&
+         !(binding.Declaration.Slot is TopLevelSlot || binding.Declaration.Slot is StaticTopLevelSlot) &&
          index >= functions[0].BindingStart && index < functions[functions.Count-1].BindingStart)
       {
-        Slot initializeSlot = (binding.Usage & Usage.Initialized) == 0 ? null : binding.Slot;
-
-        ClosureSlot slot = new ClosureSlot(var.Name, binding.Slot.Type, initializeSlot);
-        foreach(VariableNode node in binding.References) // update all the references to the binding
-        {
-          node.Slot = slot;
-        }
-
-        binding.Slot      = slot;
+        Slot initializeSlot = (binding.Usage & Usage.Initialized) == 0 ? null : binding.Declaration.Slot;
+        binding.Declaration.Slot = new ClosureSlot(var.Name, binding.Declaration.Slot.Type, initializeSlot);
         binding.InClosure = true; // mark that this binding is in a closure
         
         FindFunction(index).AddClosure(binding); // add this closure to the function definition
@@ -306,19 +376,14 @@ public class VariableSlotResolver : PrefixVisitor
     if(string.IsNullOrEmpty(var.Name)) throw new ArgumentException("Variable name cannot be empty.");
 
     // if not, assume it's a global variable reference and insert a binding for it.
-    var.Slot = new TopLevelSlot(var.Name);
-
-    if(functions != null) // since we'll be inserting a value, we may need to update the function binding indices
-    {
-      foreach(Function func in functions)
-      {
-        func.BindingStart++;
-      }
-    }
-
-    Binding globalBinding = new Binding(var.Slot, false);
-    globalBinding.AddReference(var);
+    Binding globalBinding = new Binding(var, new TopLevelSlot(var.Name), true);
     bindings.Insert(0, new KeyValuePair<string,Binding>(var.Name, globalBinding));
+
+    if(functions != null) // since we inserted a binding at index 0, we need to update the function binding indices
+    {
+      foreach(Function func in functions) func.BindingStart++;
+    }
+    
     return 0;
   }
 
@@ -429,7 +494,7 @@ public sealed class CallNode : ASTNode
       case "-": return Operator.Subtract;
       case "*": return Operator.Multiply;
       case "/": return Operator.Divide;
-      case "modulo": return Operator.Add;
+      case "modulo": return Operator.Modulus;
       default: throw new NotImplementedException();
     }
   }
@@ -450,8 +515,20 @@ public sealed class CallNode : ASTNode
 
   static bool ShouldInline(string name)
   {
-    return ((NetLispCompilerState)CompilerState.Current).OptimisticOperatorInlining &&
+    return ((NetLispCompilerState)CompilerState.Current).OptimisticInlining &&
            IsBuiltinFunction(name) && !IsOverriddenInThisScope(name);
+  }
+}
+#endregion
+
+#region DefineNode
+public class DefineNode : AssignNode
+{
+  public DefineNode(string name, ASTNode value) : base(new VariableNode(name), value, true) { }
+
+  public VariableNode Variable
+  {
+    get { return (VariableNode)LHS; }
   }
 }
 #endregion
@@ -627,12 +704,12 @@ public sealed class LocalBindingNode : ASTNode
     {
       if(binding.InitialValue != null)
       {
-        binding.Variable.EmitSet(cg, binding.InitialValue);
+        binding.Variable.EmitSet(cg, binding.InitialValue, true);
       }
       else
       {
         cg.EmitDefault(binding.Type);
-        binding.Variable.EmitSet(cg, binding.Type);
+        binding.Variable.EmitSet(cg, binding.Type, true);
       }
     }
     
@@ -696,7 +773,7 @@ public sealed class LocalBindingNode : ASTNode
 #region SymbolNode
 public sealed class SymbolNode : LiteralNode
 {
-  public SymbolNode(string name) : base(Symbol.Get(name), true) { }
+  public SymbolNode(string name) : base(LispSymbol.Get(name), true) { }
 }
 #endregion
 

@@ -95,12 +95,11 @@ public class Parser : ParserBase<NetLispCompilerState>
               case "set!": // (set! symbol form [symbol form ...])
                 ret = ParseSet();
                 break;
-              
+
               case "define": // (define symbol value)
               {
                 NextToken();
-                string name = ParseSymbolName();
-                ret = new AssignNode(new VariableNode(name, new TopLevelSlot(name)), ParseOne());
+                ret = new DefineNode(ParseSymbolName(), ParseOne());
                 break;
               }
 
@@ -114,7 +113,7 @@ public class Parser : ParserBase<NetLispCompilerState>
                 ret = new UnsafeCastNode(ParseType(), ParseExpression());
                 break;
 
-              case ".options":
+              case ".options": // (.options ((option value) ...) form ...)
                 ret = ParseOptions();
                 break;
 
@@ -327,6 +326,14 @@ public class Parser : ParserBase<NetLispCompilerState>
             break;
           case "optimize":
             if(value.Value is bool) state.Optimize = (bool)value.Value;
+            else AddMessage(NetLispDiagnostics.OptionExpects, optionName, "boolean");
+            break;
+          case "allowRedefinition":
+            if(value.Value is bool) state.AllowRedefinition = (bool)value.Value;
+            else AddMessage(NetLispDiagnostics.OptionExpects, optionName, "boolean");
+            break;
+          case "optimisticInlining":
+            if(value.Value is bool) state.OptimisticInlining = (bool)value.Value;
             else AddMessage(NetLispDiagnostics.OptionExpects, optionName, "boolean");
             break;
           default:

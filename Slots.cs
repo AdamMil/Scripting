@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Reflection;
 using System.Reflection.Emit;
 using Scripting.AST;
@@ -37,32 +38,66 @@ public abstract class Slot
   /// <exception cref="NotSupportedException">Thrown if the slot is read-only or does not support code generation.</exception>
   public void EmitSet(CodeGenerator cg)
   {
-    EmitSet(cg, Type);
+    EmitSet(cg, Type, false);
   }
 
   /// <summary>Emits code to set the value of the slot given a value of type <paramref name="typeOnStack"/> on the
   /// stack.
   /// </summary>
   /// <exception cref="NotSupportedException">Thrown if the slot is read-only or does not support code generation.</exception>
-  public abstract void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack);
+  public void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
+  {
+    EmitSet(cg, typeOnStack, false);
+  }
 
   /// <summary>Emits code to set the value of the slot given another slot that contains the new value.</summary>
   /// <remarks>The default implementation retrieves the value from the slot and calls
   /// <see cref="EmitSet(CodeGenerator,Type)"/>.
   /// </remarks>
   /// <exception cref="NotSupportedException">Thrown if the slot is read-only or does not support code generation.</exception>
-  public virtual void EmitSet(CodeGenerator cg, Slot valueSlot)
+  public void EmitSet(CodeGenerator cg, Slot valueSlot)
   {
-    valueSlot.EmitGet(cg);
-    EmitSet(cg, valueSlot.Type);
+    EmitSet(cg, valueSlot, false);
   }
 
   /// <summary>Emits code to set the value of the slot given an <see cref="ASTNode"/> representing the new value.</summary>
   /// <remarks>The default implementation emits the node and calls <see cref="EmitSet(CodeGenerator,Type)"/>.</remarks>
   /// <exception cref="NotSupportedException">Thrown if the slot is read-only or does not support code generation.</exception>
-  public virtual void EmitSet(CodeGenerator cg, ASTNode valueNode)
+  public void EmitSet(CodeGenerator cg, ASTNode valueNode)
   {
-    EmitSet(cg, valueNode.Emit(cg));
+    EmitSet(cg, valueNode, false);
+  }
+
+  /// <summary>Emits code to set the value of a slot given a value of the correct type on the stack.</summary>
+  /// <exception cref="NotSupportedException">Thrown if the slot is read-only or does not support code generation.</exception>
+  public void EmitSet(CodeGenerator cg, bool initialize)
+  {
+    EmitSet(cg, Type, initialize);
+  }
+
+  /// <summary>Emits code to set the value of the slot given a value of type <paramref name="typeOnStack"/> on the
+  /// stack.
+  /// </summary>
+  /// <exception cref="NotSupportedException">Thrown if the slot is read-only or does not support code generation.</exception>
+  public abstract void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize);
+
+  /// <summary>Emits code to set the value of the slot given another slot that contains the new value.</summary>
+  /// <remarks>The default implementation retrieves the value from the slot and calls
+  /// <see cref="EmitSet(CodeGenerator,Type)"/>.
+  /// </remarks>
+  /// <exception cref="NotSupportedException">Thrown if the slot is read-only or does not support code generation.</exception>
+  public virtual void EmitSet(CodeGenerator cg, Slot valueSlot, bool initialize)
+  {
+    valueSlot.EmitGet(cg);
+    EmitSet(cg, valueSlot.Type, initialize);
+  }
+
+  /// <summary>Emits code to set the value of the slot given an <see cref="ASTNode"/> representing the new value.</summary>
+  /// <remarks>The default implementation emits the node and calls <see cref="EmitSet(CodeGenerator,Type)"/>.</remarks>
+  /// <exception cref="NotSupportedException">Thrown if the slot is read-only or does not support code generation.</exception>
+  public virtual void EmitSet(CodeGenerator cg, ASTNode valueNode, bool initialize)
+  {
+    EmitSet(cg, valueNode.Emit(cg), initialize);
   }
 
   /// <summary>In interpreted execution, evaluates the slot to retrieve the value.</summary>
@@ -78,9 +113,9 @@ public abstract class Slot
   /// <summary>In interpreted execution, evaluates the slot to set the value.</summary>
   /// <remarks>This method converts the value to type <see cref="Type"/> and calls <see cref="EvaluateTypedSet"/>.</remarks>
   /// <exception cref="NotSupportedException">Thrown if this slot does not support interpreted execution.</exception>
-  public void EvaluateSet(object newValue)
+  public void EvaluateSet(object newValue, bool initialize)
   {
-    EvaluateTypedSet(Ops.ConvertTo(newValue, Type.DotNetType));
+    EvaluateTypedSet(Ops.ConvertTo(newValue, Type.DotNetType), initialize);
   }
 
   public abstract bool IsSameAs(Slot other);
@@ -88,11 +123,15 @@ public abstract class Slot
   /// <summary>In interpreted execution, evaluates the slot to set the value given an instance of type
   /// <see cref="Type"/> (or null, for nullable types).
   /// </summary>
+  /// <param name="newValue">The value to assign to the slot, which should be an instance of <see cref="Type"/>, or
+  /// null (for nullable types).
+  /// </param>
+  /// <param name="initialize">If true, the slot is being set for the first time.</param>
   /// <remarks>The default implementation throws <see cref="NotSupportedException"/>.</remarks>
   /// <exception cref="NotSupportedException">
   /// Thrown if the slot is read-only or does not support interpreted execution.
   /// </exception>
-  protected virtual void EvaluateTypedSet(object newValue)
+  protected virtual void EvaluateTypedSet(object newValue, bool initialize)
   {
     throw new NotSupportedException("This slot does not support interpreted evaluation.");
   }
@@ -150,7 +189,7 @@ public sealed class ArraySlot : Slot
     cg.ILG.Emit(OpCodes.Ldelema, elementType.DotNetType);
   }
 
-  public override void EmitSet(CodeGenerator cg, ASTNode valueNode)
+  public override void EmitSet(CodeGenerator cg, ASTNode valueNode, bool initialize)
   {
     Array.EmitGet(cg);
     cg.EmitInt(Index);
@@ -158,7 +197,7 @@ public sealed class ArraySlot : Slot
     cg.EmitArrayStore(elementType.DotNetType);
   }
 
-  public override void EmitSet(CodeGenerator cg, Slot valueSlot)
+  public override void EmitSet(CodeGenerator cg, Slot valueSlot, bool initialize)
   {
     Array.EmitGet(cg);
     cg.EmitInt(Index);
@@ -166,7 +205,7 @@ public sealed class ArraySlot : Slot
     cg.EmitArrayStore(elementType.DotNetType);
   }
 
-  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize)
   {
     Slot temp = cg.AllocLocalTemp(elementType);
     temp.EmitSet(cg, typeOnStack);
@@ -180,7 +219,7 @@ public sealed class ArraySlot : Slot
     return array.GetValue(Index);
   }
 
-  protected override void EvaluateTypedSet(object newValue)
+  protected override void EvaluateTypedSet(object newValue, bool initialize)
   {
     Array array = (Array)Array.EvaluateGet();
     array.SetValue(newValue, Index);
@@ -278,57 +317,40 @@ public sealed class ClosureSlot : Slot
     GetFieldSlot(cg).EmitGetAddr(cg);
   }
 
-  public override void EmitSet(CodeGenerator cg, ASTNode valueNode)
+  public override void EmitSet(CodeGenerator cg, ASTNode valueNode, bool initialize)
   {
-    GetFieldSlot(cg).EmitSet(cg, valueNode);
+    GetFieldSlot(cg).EmitSet(cg, valueNode, initialize);
   }
 
-  public override void EmitSet(CodeGenerator cg, Slot valueSlot)
+  public override void EmitSet(CodeGenerator cg, Slot valueSlot, bool initialize)
   {
-    GetFieldSlot(cg).EmitSet(cg, valueSlot);
+    GetFieldSlot(cg).EmitSet(cg, valueSlot, initialize);
   }
 
-  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize)
   {
-    GetFieldSlot(cg).EmitSet(cg, typeOnStack);
+    GetFieldSlot(cg).EmitSet(cg, typeOnStack, initialize);
   }
 
   public void EmitInitialization(CodeGenerator cg)
   {
     if(initialValueSlot != null)
     {
-      GetFieldSlot(cg).EmitSet(cg, initialValueSlot);
+      GetFieldSlot(cg).EmitSet(cg, initialValueSlot, true);
     }
   }
 
   public override bool IsSameAs(Slot other)
   {
-    throw new NotImplementedException();
+    throw new NotImplementedException(); // TODO: implement this
   }
 
   Slot GetFieldSlot(CodeGenerator cg)
   {
     if(fieldSlot == null)
     {
-      ITypeInfo closureType;
-      Slot closureSlot;
-      if(Depth == 0)
-      {
-        closureSlot = cg.ClosureSlot;
-        closureType = closureSlot.Type;
-      }
-      else
-      {
-        closureType = cg.TypeGen;
-        closureSlot = new ThisSlot(type);
-        for(int i=1; i<Depth; i++)
-        {
-          closureSlot = new FieldSlot(closureSlot, type.GetField("$parent"+Depth));
-          closureType = closureType.BaseType;
-        }
-      }
-
-      fieldSlot = new FieldSlot(closureSlot, closureType.GetField(name));
+      Slot closureSlot = cg.GetClosureSlot(Depth);
+      fieldSlot = new FieldSlot(closureSlot, closureSlot.Type.GetField(name));
     }
 
     return fieldSlot;
@@ -360,7 +382,7 @@ public abstract class InterpretedSlot : Slot
     throw new NotSupportedException("This slot does not support code generation.");
   }
 
-  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize)
   {
     throw new NotSupportedException("This slot does not support code generation.");
   }
@@ -401,7 +423,7 @@ public sealed class InterpretedLocalSlot : InterpretedSlot
     return InterpreterEnvironment.Current.Get(name);
   }
 
-  protected override void EvaluateTypedSet(object newValue)
+  protected override void EvaluateTypedSet(object newValue, bool initialize)
   {
     InterpreterEnvironment.Current.Set(name, newValue);
   }
@@ -478,7 +500,7 @@ public sealed class FieldSlot : Slot
     cg.EmitFieldGetAddr(Field);
   }
 
-  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize)
   {
     cg.EmitConversion(typeOnStack, Type);
     if(Instance == null)
@@ -494,14 +516,14 @@ public sealed class FieldSlot : Slot
     }
   }
 
-  public override void EmitSet(CodeGenerator cg, Slot valueSlot)
+  public override void EmitSet(CodeGenerator cg, Slot valueSlot, bool initialize)
   {
     if(Instance != null) Instance.EmitGet(cg);
     cg.EmitTypedSlot(valueSlot, Type);
     cg.EmitFieldSet(Field);
   }
 
-  public override void EmitSet(CodeGenerator cg, ASTNode valueNode)
+  public override void EmitSet(CodeGenerator cg, ASTNode valueNode, bool initialize)
   {
     if(Instance != null) Instance.EmitGet(cg);
     cg.EmitTypedNode(valueNode, Type);
@@ -513,7 +535,7 @@ public sealed class FieldSlot : Slot
     return Field.Field.GetValue(Instance == null ? null : Instance.EvaluateGet());
   }
 
-  protected override void EvaluateTypedSet(object newValue)
+  protected override void EvaluateTypedSet(object newValue, bool initialize)
   {
     Field.Field.SetValue(Instance == null ? null : Instance.EvaluateGet(), newValue);
   }
@@ -585,7 +607,7 @@ public sealed class LocalSlot : Slot
     cg.ILG.Emit(OpCodes.Ldloca, builder);
   }
 
-  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize)
   {
     cg.EmitConversion(typeOnStack, Type);
     cg.ILG.Emit(OpCodes.Stloc, builder);
@@ -607,15 +629,9 @@ public sealed class LocalSlot : Slot
 /// <remarks>This class exists so that AST processors can create a local slot even though the code generator for the
 /// local slot has not been created yet. The actual local slot will be allocated when it's needed.
 /// </remarks>
-public sealed class LocalProxySlot : Slot
+public sealed class LocalProxySlot : ProxySlot
 {
-  public LocalProxySlot(string name, ITypeInfo type)
-  {
-    if(name == null || type == null) throw new ArgumentNullException();
-    if(string.IsNullOrEmpty(name)) throw new ArgumentException("Name cannot be empty.");
-    this.name = name;
-    this.type = type;
-  }
+  public LocalProxySlot(string name, ITypeInfo type) : base(name, type) { }
 
   public override bool CanGetAddr
   {
@@ -632,54 +648,16 @@ public sealed class LocalProxySlot : Slot
     get { return true; }
   }
 
-  public override ITypeInfo Type
-  {
-    get { return type; }
-  }
-
-  public override void EmitGet(CodeGenerator cg)
-  {
-    GetSlot(cg).EmitGet(cg);
-  }
-
-  public override void EmitGetAddr(CodeGenerator cg)
-  {
-    GetSlot(cg).EmitGetAddr(cg);
-  }
-
-  public override void EmitSet(CodeGenerator cg, ASTNode valueNode)
-  {
-    GetSlot(cg).EmitSet(cg, valueNode);
-  }
-
-  public override void EmitSet(CodeGenerator cg, Slot valueSlot)
-  {
-    GetSlot(cg).EmitSet(cg, valueSlot);
-  }
-
-  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
-  {
-    GetSlot(cg).EmitSet(cg, typeOnStack);
-  }
-
-  Slot GetSlot(CodeGenerator cg)
-  {
-    if(slot == null)
-    {
-      slot = cg.AllocLocalVariable(name, type);
-    }
-    return slot;
-  }
-
   public override bool IsSameAs(Slot other)
   {
     LocalProxySlot otherSlot = other as LocalProxySlot;
-    return otherSlot != null && string.Equals(name, otherSlot.name, StringComparison.Ordinal);
+    return otherSlot != null && string.Equals(Name, otherSlot.Name, StringComparison.Ordinal);
   }
 
-  readonly string name;
-  readonly ITypeInfo type;
-  Slot slot;
+  protected override Slot CreateSlot(CodeGenerator cg, string name, ITypeInfo type)
+  {
+    return cg.AllocLocalVariable(name, type);
+  }
 }
 #endregion
 
@@ -765,8 +743,10 @@ public sealed class ParameterSlot : Slot
   /// <summary>Sets the value referred to by the parameter. If the parameter type is by reference, this will
   /// modify the original object and not the pointer.
   /// </summary>
-  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize)
   {
+    if(initialize) throw new ArgumentException("Parameters can only be initialized by the framework.");
+
     if(IsByRef)
     {
       Slot temp = cg.AllocLocalTemp(Type);
@@ -799,6 +779,82 @@ public sealed class ParameterSlot : Slot
   /// <summary>The zero-based parameter position, excluding any implicit 'this' pointer.</summary>
   readonly int ArgIndex;
   readonly ITypeInfo type;
+}
+#endregion
+
+#region ProxySlot
+/// <summary>Represents a slot that will be allocated when necessary.</summary>
+/// <remarks>This class exists so that AST processors can create a slot even though the code generator for the
+/// slot has not been created yet. The actual slot will be allocated when it's needed.
+/// </remarks>
+public abstract class ProxySlot : Slot
+{
+  public ProxySlot(string name, ITypeInfo type)
+  {
+    if(name == null || type == null) throw new ArgumentNullException();
+    if(string.IsNullOrEmpty(name)) throw new ArgumentException("Name cannot be empty.");
+    this.name = name;
+    this.type = type;
+  }
+
+  public string Name
+  {
+    get { return name; }
+  }
+
+  public sealed override ITypeInfo Type
+  {
+    get { return type; }
+  }
+
+  public override void EmitGet(CodeGenerator cg)
+  {
+    if(!CanRead) throw new NotSupportedException();
+    GetSlot(cg).EmitGet(cg);
+  }
+
+  public override void EmitGetAddr(CodeGenerator cg)
+  {
+    if(!CanGetAddr) throw new NotSupportedException();
+    GetSlot(cg).EmitGetAddr(cg);
+  }
+
+  public override void EmitSet(CodeGenerator cg, ASTNode valueNode, bool initialize)
+  {
+    if(!CanWrite) throw new NotSupportedException();
+    GetSlot(cg).EmitSet(cg, valueNode, initialize);
+  }
+
+  public override void EmitSet(CodeGenerator cg, Slot valueSlot, bool initialize)
+  {
+    if(!CanWrite) throw new NotSupportedException();
+    GetSlot(cg).EmitSet(cg, valueSlot, initialize);
+  }
+
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize)
+  {
+    if(!CanWrite) throw new NotSupportedException();
+    GetSlot(cg).EmitSet(cg, typeOnStack, initialize);
+  }
+
+  public void SetType(ITypeInfo type)
+  {
+    if(type == null) throw new ArgumentNullException();
+    if(slot != null) throw new InvalidOperationException("The type cannot be changed once the slot has been created.");
+    this.type = type;
+  }
+
+  protected abstract Slot CreateSlot(CodeGenerator cg, string name, ITypeInfo type);
+
+  protected Slot GetSlot(CodeGenerator cg)
+  {
+    if(slot == null) slot = CreateSlot(cg, name, type);
+    return slot;
+  }
+
+  readonly string name;
+  ITypeInfo type;
+  Slot slot;
 }
 #endregion
 
@@ -843,8 +899,9 @@ public sealed class ThisSlot : Slot
     cg.ILG.Emit(OpCodes.Ldarga, 0);
   }
 
-  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize)
   {
+    if(initialize) throw new ArgumentException("The this pointer can only be initialized by the framework.");
     cg.EmitConversion(typeOnStack, Type);
     cg.ILG.Emit(OpCodes.Starg, 0);
   }
@@ -862,6 +919,7 @@ public sealed class ThisSlot : Slot
 public sealed class TopLevelSlot : Slot
 {
   public TopLevelSlot(string name) : this(name, TypeWrapper.Unknown) { }
+
   public TopLevelSlot(string name, ITypeInfo type)
   {
     if(name == null || type == null) throw new ArgumentNullException();
@@ -871,7 +929,7 @@ public sealed class TopLevelSlot : Slot
 
   public override bool CanGetAddr
   {
-    get { return type == typeof(object); }
+    get { return type.DotNetType == typeof(object); }
   }
 
   public override bool CanRead
@@ -892,7 +950,7 @@ public sealed class TopLevelSlot : Slot
   public override void EmitGet(CodeGenerator cg)
   {
     EmitBinding(cg);
-    if(CompilerState.Current.Debug) cg.EmitCall(typeof(Ops), "CheckBinding");
+    if(CompilerState.Current.Debug || !CompilerState.Current.Optimize) cg.EmitCall(typeof(Ops), "CheckBinding");
     cg.EmitFieldGet(valueField);
     cg.EmitUnsafeConversion(TypeWrapper.Object, type);
   }
@@ -900,33 +958,36 @@ public sealed class TopLevelSlot : Slot
   public override void EmitGetAddr(CodeGenerator cg)
   {
     if(type != typeof(object)) throw new NotSupportedException("Only the address of an Object slot can be retrieved.");
-    if(CompilerState.Current.Debug) cg.EmitCall(typeof(Ops), "CheckBinding");
+    if(CompilerState.Current.Debug || !CompilerState.Current.Optimize) cg.EmitCall(typeof(Ops), "CheckBinding");
     cg.EmitFieldGetAddr(valueField);
   }
 
-  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize)
   {
     cg.EmitConversion(typeOnStack, type);
     cg.EmitSafeConversion(type, TypeWrapper.Object);
     Slot temp = cg.AllocLocalTemp(TypeWrapper.Object);
     temp.EmitSet(cg);
     EmitBinding(cg);
+    if(!initialize) cg.EmitCall(typeof(Ops), "CheckBinding");
     temp.EmitGet(cg);
     cg.FreeLocalTemp(temp);
     cg.EmitFieldSet(valueField);
   }
 
-  public override void EmitSet(CodeGenerator cg, ASTNode valueNode)
+  public override void EmitSet(CodeGenerator cg, ASTNode valueNode, bool initialize)
   {
     EmitBinding(cg);
+    if(!initialize) cg.EmitCall(typeof(Ops), "CheckBinding");
     cg.EmitTypedNode(valueNode, type);
     cg.EmitSafeConversion(type, TypeWrapper.Object);
     cg.EmitFieldSet(valueField);
   }
 
-  public override void EmitSet(CodeGenerator cg, Slot valueSlot)
+  public override void EmitSet(CodeGenerator cg, Slot valueSlot, bool initialize)
   {
     EmitBinding(cg);
+    if(!initialize) cg.EmitCall(typeof(Ops), "CheckBinding");
     cg.EmitTypedSlot(valueSlot, type);
     cg.EmitSafeConversion(type, TypeWrapper.Object);
     cg.EmitFieldSet(valueField);
@@ -939,7 +1000,13 @@ public sealed class TopLevelSlot : Slot
   }
 
   public readonly string Name;
-  
+
+  protected override void EvaluateTypedSet(object newValue, bool initialize)
+  {
+    if(initialize) TopLevel.Current.Bind(Name, newValue);
+    else TopLevel.Current.Set(Name, newValue);
+  }
+
   void EmitBinding(CodeGenerator cg)
   {
     if(binding == null)

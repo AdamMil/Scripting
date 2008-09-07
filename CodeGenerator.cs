@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
@@ -835,7 +836,7 @@ public class CodeGenerator
         }
 
         FieldBuilder dataField =
-          TypeGen.Assembly.Module.DefineInitializedData("data$"+dataIndex.Next+"_"+elementType.Name,
+          TypeGen.Assembly.Module.DefineInitializedData("data$" + dataIndex.NextString + "_" + elementType.Name,
                                                         data, FieldAttributes.Static);
         EmitNewArray(array);
         EmitDup();
@@ -1670,6 +1671,30 @@ public class CodeGenerator
     return constantCache.GetSlot(value);
   }
 
+  /// <summary>Returns a slot referencing the closure at the given depth up the chain of closures. A depth of zero
+  /// returns the closure created by the current function. A depth of one returns the nearest closure created by an
+  /// ancestor function. Etc.
+  /// </summary>
+  public Slot GetClosureSlot(int depth)
+  {
+    if(depth < 0) throw new ArgumentOutOfRangeException();
+
+    if(depth == 0) return ClosureSlot;
+
+    Slot slot = closureSlot == null ? new ThisSlot(TypeGen) : ClosureSlot;
+    if(--depth != 0)
+    {
+      IFieldInfo parentField = slot.Type.GetField("parent$" + depth.ToString(CultureInfo.InvariantCulture));
+      if(parentField == null)
+      {
+        throw new ArgumentNullException("The closure is not configured to reference a depth of " + depth.ToString());
+      }
+      slot = new FieldSlot(slot, parentField);
+    }
+
+    return slot;
+  }
+
   /// <summary>Marks the current method as being a generator method. This must be done before any code is emitted or
   /// variables are allocated in the method.
   /// </summary>
@@ -1704,24 +1729,39 @@ public class CodeGenerator
     CG.SetCustomAttribute(Method.Method, attributeBuilder);
   }
 
-  public TypeGenerator SetupClosure(ClosureSlot[] closures, bool referencesParentClosure)
+  public TypeGenerator SetupClosure(ClosureSlot[] closures, int maxReferenceDepth)
   {
     if(closures == null || closures.Length == 0) throw new ArgumentException("No closures were given.");
     
-    TypeGenerator closureType = TypeGen.DefineNestedType(TypeAttributes.NestedPrivate|TypeAttributes.Sealed,
-                                                         "closure$"+closureIndex.Next);
+    // TODO: reuse closure classes based on the types of items in them. this allows us to reuse method wrappers that
+    // call functions in a closure.
 
-    // if the closure references its parent closure, create a constructor that takes the 'this' pointer (the parent
-    // closure) and stores it
-    if(referencesParentClosure)
+    TypeGenerator closureType = TypeGen.DefineNestedType(TypeAttributes.NestedPrivate|TypeAttributes.Sealed,
+                                          "closure$" + closureIndex.NextString);
+
+    // if the closure references its parent closure, create a constructor that takes the parent closure and stores it
+    if(maxReferenceDepth > 0)
     {
-      FieldSlot parent = closureType.DefineField("$parent", TypeGen);
       CodeGenerator cons = closureType.DefineConstructor(TypeGen);
       cons.EmitThis(); // call the base constructor
-      cons.EmitCall(cons.TypeGen.BaseType.GetConstructor(BindingFlags.Public|BindingFlags.Instance,
+      cons.EmitCall(cons.TypeGen.BaseType.GetConstructor(BindingFlags.Public | BindingFlags.Instance,
                                                          TypeWrapper.EmptyTypes));
+      FieldSlot parent = closureType.DefineField(FieldAttributes.Public | FieldAttributes.InitOnly,
+                                                 "parent$1", TypeGen);
       cons.EmitThis(); // set the parent field
-      parent.EmitSet(cons);
+      cons.EmitArgGet(0);
+      cons.EmitFieldSet(parent.Field);
+
+      for(int i=2; i <= maxReferenceDepth; i++)
+      {
+        FieldSlot ppField    = new FieldSlot(parent, parent.Type.GetField("parent$1"));
+        FieldSlot nextParent = closureType.DefineField(FieldAttributes.Public | FieldAttributes.InitOnly,
+                                                       "parent$" + i.ToString(CultureInfo.InvariantCulture),
+                                                       ppField.Type);
+        nextParent.EmitSet(cons, ppField);
+        parent = nextParent;
+      }
+
       cons.EmitReturn(); // return
       cons.Finish();
 

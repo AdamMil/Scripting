@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 
 namespace Scripting.AST
@@ -51,7 +52,14 @@ public abstract class PrefixProcessor : ProcessorBase
 
   public override void Process(ref ASTNode rootNode)
   {
+    options = CompilerState.Current;
     RecursiveVisit(ref rootNode);
+    options = null;
+  }
+
+  protected CompilerState CurrentOptions
+  {
+    get { return options; }
   }
 
   protected abstract bool Visit(ref ASTNode node);
@@ -61,6 +69,14 @@ public abstract class PrefixProcessor : ProcessorBase
   {
     if(Visit(ref node))
     {
+      OptionsNode optionsNode = node as OptionsNode;
+      if(optionsNode != null)
+      {
+        if(optionsStack == null) optionsStack = new Stack<CompilerState>();
+        optionsStack.Push(options);
+        options = optionsNode.CompilerState;
+      }
+
       for(int i=0; i<node.Children.Count; i++)
       {
         ASTNode child = node.Children[i];
@@ -75,10 +91,15 @@ public abstract class PrefixProcessor : ProcessorBase
           node.Children[i] = child;
         }
       }
+
+      if(optionsNode != null) options = optionsStack.Pop();
     }
 
     if(node != null) EndVisit(node); // Visit may have set the node to null (removing it)
   }
+
+  CompilerState options;
+  Stack<CompilerState> optionsStack;
 }
 #endregion
 
@@ -90,9 +111,16 @@ public abstract class PrefixVisitor : ProcessorBase
 
   public override void Process(ref ASTNode rootNode)
   {
+    options = CompilerState.Current;
     RecursiveVisit(rootNode);
+    options = null;
   }
   
+  protected CompilerState CurrentOptions
+  {
+    get { return options; }
+  }
+
   /// <returns>Returns true if the children of the node should be visited.</returns>
   protected abstract bool Visit(ASTNode node);
 
@@ -102,14 +130,27 @@ public abstract class PrefixVisitor : ProcessorBase
   {
     if(Visit(node))
     {
+      OptionsNode optionsNode = node as OptionsNode;
+      if(optionsNode != null)
+      {
+        if(optionsStack == null) optionsStack = new Stack<CompilerState>();
+        optionsStack.Push(options);
+        options = optionsNode.CompilerState;
+      }
+
       foreach(ASTNode child in node.Children)
       {
         RecursiveVisit(child);
       }
+
+      if(optionsNode != null) options = optionsStack.Pop();
     }
     
     EndVisit(node);
   }
+
+  CompilerState options;
+  Stack<CompilerState> optionsStack;
 }
 #endregion
 
@@ -197,31 +238,44 @@ public enum DecoratorType
 }
 #endregion
 
-#region ContextMarkerStage
-/// <summary>This processor simply calls <see cref="ASTNode.MarkTail"/> and <see cref="ASTNode.SetValueContext"/>on the
-/// root node.
+#region CoreSemanticChecker
+/// <summary>This processor calls <see cref="ASTNode.MarkTail"/> and <see cref="ASTNode.SetValueContext"/> on the
+/// root node, and then visits each node in prefix order, calling <see cref="ASTNode.CheckSemantics"/> once on the way
+/// down the tree and once more on the way back up.
 /// </summary>
-public class ContextMarkerStage : IASTProcessor
+public class CoreSemanticChecker : PrefixVisitor
 {
   /// <summary>Creates a tail marker stage with an initial tail value of true.</summary>
-  public ContextMarkerStage() : this(Emit.TypeWrapper.Unknown, true) { }
+  public CoreSemanticChecker(DecoratorType type) : this(type, Emit.TypeWrapper.Unknown, true) { }
 
   /// <summary>Creates a tail marker stage with the given initial tail value.</summary>
-  public ContextMarkerStage(Emit.ITypeInfo initialContext, bool initialTail)
+  public CoreSemanticChecker(DecoratorType type, Emit.ITypeInfo initialContext, bool initialTail) : base(type)
   {
     this.initialContext = initialContext;
     this.initialTail    = initialTail;
   }
 
-  public Stage Stage
+  public override Stage Stage
   {
     get { return Stage.Decorate; }
   }
 
-  public void Process(ref ASTNode rootNode)
+  public override void Process(ref ASTNode rootNode)
   {
     rootNode.MarkTail(initialTail);
     rootNode.SetValueContext(initialContext);
+    base.Process(ref rootNode);
+  }
+
+  protected override bool Visit(ASTNode node)
+  {
+    node.CheckSemantics();
+    return true;
+  }
+
+  protected override void EndVisit(ASTNode node)
+  {
+    node.CheckSemantics2();
   }
 
   readonly Emit.ITypeInfo initialContext;

@@ -41,6 +41,28 @@ public static class LispOps
 }
 #endregion
 
+#region LispSymbol
+public sealed class LispSymbol
+{
+  public LispSymbol(string name) { Name = name; }
+
+  public readonly string Name;
+  public override string ToString() { return Name; }
+
+  public static LispSymbol Get(string name)
+  {
+    LispSymbol sym;
+    lock(table)
+    {
+      if(!table.TryGetValue(name, out sym)) table[name] = sym = new LispSymbol(name);
+    }
+    return sym;
+  }
+
+  static readonly Dictionary<string,LispSymbol> table = new Dictionary<string,LispSymbol>();
+}
+#endregion
+
 #region Pair
 public sealed class Pair
 {
@@ -56,28 +78,6 @@ public sealed class Pair
   }
 
   public object Car, Cdr;
-}
-#endregion
-
-#region Symbol
-public sealed class Symbol
-{
-  public Symbol(string name) { Name = name; }
-
-  public readonly string Name;
-  public override string ToString() { return Name; }
-
-  public static Symbol Get(string name)
-  {
-    Symbol sym;
-    lock(table)
-    {
-      if(!table.TryGetValue(name, out sym)) table[name] = sym = new Symbol(name);
-    }
-    return sym;
-  }
-
-  static readonly Dictionary<string,Symbol> table = new Dictionary<string,Symbol>();
 }
 #endregion
 

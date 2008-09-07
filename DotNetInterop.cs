@@ -11,7 +11,7 @@ namespace Scripting.Emit
 public static class DotNetInterop
 {
   internal static ITypeInfo MakeMethodWrapper(TypeGenerator parentClass, Signature signature,
-                                         IMethodBase method, string name)
+                                              IMethodBase method, string name)
   {
     return MakeMethodWrapper(parentClass, signature, name, method as IConstructorInfo);
   }
@@ -23,27 +23,43 @@ public static class DotNetInterop
                                    signature.IsConstructor ? typeof(MethodWrapper) : typeof(FunctionWrapper));
 
     // number of normal (non param-array) arguments, and min/max allowable arguments
-    int numNormalArgs = signature.HasParamArray ? signature.ParamTypes.Length - 1 : signature.ParamTypes.Length;
+    int numNormalArgs = signature.ParamTypes.Length - (signature.HasParamArray ? 1 : 0);
     int minArgs = numNormalArgs;
     int maxArgs = signature.HasParamArray ? -1 : signature.ParamTypes.Length;
-    
+
+    FieldSlot thisField = null;
     CodeGenerator cg;
 
-    #region Constructor
-    if(!signature.IsConstructor) // normal methods take an IntPtr and a boolean and simply pass it to the base class.
+    #region Constructors
+    if(!signature.IsConstructor) // normal methods take an IntPtr
     {
-      cg = tg.DefineChainedConstructor(TypeWrapper.IntPtr, TypeWrapper.Bool);
+      cg = tg.DefineChainedConstructor(TypeWrapper.IntPtr);
     }
-    else // constructors have a default constructor that passes 'false' to the base class
+    else // constructors take no arguments
     {
-      cg = tg.DefineDefaultConstructor();
-      cg.EmitThis();
-      cg.EmitBool(false);
-      cg.EmitCall(tg.BaseType.GetConstructor(BindingFlags.Instance|BindingFlags.NonPublic, TypeWrapper.Bool));
+      cg = tg.DefineChainedConstructor();
     }
     // whichever constructor was used, finish it
     cg.EmitReturn();
     cg.Finish();
+
+    // if the method needs a 'this' pointer, create a constructor that takes the 'this' pointer
+    if(!signature.IsConstructor && signature.RequireThisPtr)
+    {
+      thisField = tg.DefineField(FieldAttributes.Private | FieldAttributes.InitOnly, "thisPtr",
+                                 signature.ParamTypes[0]);
+
+      cg = tg.DefineConstructor(TypeWrapper.IntPtr, signature.ParamTypes[0]);
+      cg.EmitThis();
+      cg.EmitArgGet(0);
+      cg.EmitCall(tg.BaseType.GetConstructor(BindingFlags.NonPublic | BindingFlags.Instance, TypeWrapper.IntPtr));
+      cg.EmitThis();
+      cg.EmitArgGet(1);
+      cg.EmitFieldSet(thisField.Field);
+
+      cg.EmitReturn();
+      cg.Finish();
+    }
     #endregion
     
     #region MinArgs and MaxArgs
@@ -58,87 +74,71 @@ public static class DotNetInterop
     cg.Finish();
     #endregion
     
-    MethodInfo checkArity = null;
-    // TODO: move CheckArity into a base class so we don't duplicate all this code for each wrapper
-    #region CheckArity
-    if(minArgs != 0 || maxArgs != -1) // if the argument counts aren't unlimited, emit a function to check the arity
-    {
-      cg = tg.DefineStaticMethod(MethodAttributes.Private, "CheckArity", TypeWrapper.Void, TypeWrapper.ObjectArray);
-      
-      Slot intSlot = cg.AllocLocalTemp(TypeWrapper.Int);
-
-      if(minArgs != 0) // check minimum
-      {
-        Label end = cg.ILG.DefineLabel();
-        cg.EmitArgGet(0);
-        cg.ILG.Emit(OpCodes.Ldlen);
-        cg.EmitInt(minArgs);
-        cg.ILG.Emit(OpCodes.Bge_S, end);
-        
-        cg.EmitString((signature.IsConstructor ? "Constructor" : "Function") + " expects at least ");
-        cg.EmitInt(minArgs);
-        intSlot.EmitSet(cg);
-        intSlot.EmitGetAddr(cg);
-        cg.EmitCall(typeof(int), "ToString", Type.EmptyTypes);
-        cg.EmitString(" arguments, but received ");
-        cg.EmitArgGet(0);
-        cg.ILG.Emit(OpCodes.Ldlen);
-        intSlot.EmitSet(cg);
-        intSlot.EmitGetAddr(cg);
-        cg.EmitCall(typeof(int), "ToString", Type.EmptyTypes);
-        cg.EmitCall(typeof(string), "Concat", typeof(string), typeof(string), typeof(string), typeof(string));
-        cg.EmitNew(typeof(ArgumentException), typeof(string));
-        cg.ILG.Emit(OpCodes.Throw);
-        
-        cg.ILG.MarkLabel(end);
-      }
-      
-      if(maxArgs != -1)
-      {
-        Label end = cg.ILG.DefineLabel();
-        cg.EmitArgGet(0);
-        cg.ILG.Emit(OpCodes.Ldlen);
-        cg.EmitInt(maxArgs);
-        cg.ILG.Emit(OpCodes.Ble_S, end);
-
-        cg.EmitString((signature.IsConstructor ? "Constructor" : "Function") + " expects at most ");
-        cg.EmitInt(maxArgs);
-        intSlot.EmitSet(cg);
-        intSlot.EmitGetAddr(cg);
-        cg.EmitCall(typeof(int), "ToString", Type.EmptyTypes);
-        cg.EmitString(" arguments, but received ");
-        cg.EmitArgGet(0);
-        cg.ILG.Emit(OpCodes.Ldlen);
-        intSlot.EmitSet(cg);
-        intSlot.EmitGetAddr(cg);
-        cg.EmitCall(typeof(int), "ToString", Type.EmptyTypes);
-        cg.EmitCall(typeof(string), "Concat", typeof(string), typeof(string), typeof(string), typeof(string));
-        cg.EmitNew(typeof(ArgumentException), typeof(string));
-        cg.ILG.Emit(OpCodes.Throw);
-
-        cg.ILG.MarkLabel(end);
-      }
-
-      cg.EmitReturn();
-      cg.Finish();
-
-      checkArity = (MethodInfo)cg.Method.Method;
-    }
-    #endregion
-    
+    // TODO: add a custom attribute to the Call() method to cause the debugger to step through it?
     #region Call(object[])
     cg = tg.DefineMethodOverride("Call", TypeWrapper.ObjectArray);
-    
-    if(checkArity != null) // check the arity if any
+
+    if(minArgs != 0 || maxArgs != -1) // if the argument counts aren't unlimited, emit a call to check the arity
     {
       cg.EmitArgGet(0);
-      cg.EmitCall(checkArity);
+      cg.ILG.Emit(OpCodes.Ldlen);
+
+      if(thisField != null)
+      {
+        thisField.EmitGet(cg); // add one to the length if we have a 'this' pointer
+        Label noThisPtr = cg.ILG.DefineLabel();
+        cg.ILG.Emit(OpCodes.Brfalse_S, noThisPtr);
+        cg.EmitInt(1);
+        cg.ILG.Emit(OpCodes.Add);
+        cg.ILG.MarkLabel(noThisPtr);
+      }
+
+      cg.EmitInt(minArgs);
+      cg.EmitInt(maxArgs);
+      cg.EmitCall(typeof(MethodWrapper), "CheckArity");
+    }
+
+    // if a 'this' pointer is specified, the arguments taken from the array will be shifted by one in position, so
+    // we'll need a variable to keep track of the index
+    Slot indexSlot = thisField == null ? null : cg.AllocLocalTemp(TypeWrapper.Int);
+    if(indexSlot != null)
+    {
+      cg.EmitInt(0);
+      indexSlot.EmitSet(cg);
     }
 
     for(int i=0; i<minArgs; i++) // required arguments
     {
-      cg.EmitArgGet(0); // load the object reference
-      cg.EmitInt(i);
+      Label firstArgDone = new Label();
+
+      if(i == 0 && thisField != null)
+      {
+        Label noThisPtr = cg.ILG.DefineLabel();
+        firstArgDone = cg.ILG.DefineLabel();
+
+        thisField.EmitGet(cg);
+        cg.ILG.Emit(OpCodes.Brfalse_S, noThisPtr);
+        thisField.EmitGet(cg);
+        cg.ILG.Emit(OpCodes.Br_S, firstArgDone);
+        cg.ILG.MarkLabel(noThisPtr);
+      }
+
+      cg.EmitArgGet(0); // load the object reference from the object[]
+      if(indexSlot != null)
+      {
+        indexSlot.EmitGet(cg);
+        if(i < signature.ParamTypes.Length-1) // increment the index after using it, if it's not the last one
+        {
+          cg.EmitDup();
+          cg.EmitInt(1);
+          cg.ILG.Emit(OpCodes.Add);
+          indexSlot.EmitSet(cg);
+        }
+      }
+      else
+      {
+        cg.EmitInt(i);
+      }
       cg.ILG.Emit(OpCodes.Ldelem_Ref);
 
       if(signature.ParamTypes[i].DotNetType.IsByRef || signature.ParamTypes[i].DotNetType.IsPointer)
@@ -146,7 +146,9 @@ public static class DotNetInterop
         throw new NotImplementedException();
       }
       
-      cg.EmitRuntimeConversion(TypeWrapper.Object, signature.ParamTypes[i]);
+      cg.EmitRuntimeConversion(TypeWrapper.Unknown, signature.ParamTypes[i]);
+
+      if(i == 0 && thisField != null) cg.ILG.MarkLabel(firstArgDone);
     }
     
     if(minArgs < numNormalArgs) // if there are any optional arguments
@@ -158,7 +160,9 @@ public static class DotNetInterop
     {
       throw new NotImplementedException();
     }
-    
+
+    if(indexSlot != null) cg.FreeLocalTemp(indexSlot);
+
     // now that we've pushed the parameters, emit the actual call
     if(signature.IsConstructor) // if it's a constructor wrapper, emit a call to the constructor
     {
@@ -169,7 +173,7 @@ public static class DotNetInterop
       cg.EmitThis();
       cg.EmitFieldGet(typeof(FunctionWrapper), "MethodPtr");
 
-      if(!signature.ReturnType.IsValueType) // we can tail call if we don't need to box or emit afterwards
+      if(!signature.ReturnType.IsValueType) // we can tail call if we don't need to box afterwards
       {
         cg.ILG.Emit(OpCodes.Tailcall);
       }
@@ -261,6 +265,25 @@ sealed class Signature
  	  return hash;
   }
 
+  public override string ToString()
+  {
+    System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+    if(IsConstructor) sb.Append("cons ");
+    if(RequireThisPtr) sb.Append("this ");
+
+    sb.Append(ReturnType.Name).Append(" (");
+    for(int i=0; i<ParamTypes.Length; i++)
+    {
+      if(i != 0) sb.Append(", ");
+      if(HasParamArray && i == ParamTypes.Length-1) sb.Append(" params ");
+      sb.Append(ParamTypes[i].Name);
+    }
+    sb.Append(')');
+
+    return sb.ToString();
+  }
+
   public readonly ITypeInfo[] ParamTypes;
   public readonly ITypeInfo ReturnType;
   public readonly CallingConventions Convention;
@@ -277,13 +300,6 @@ namespace Scripting.Runtime
 /// <summary>Base class of all function wrappers (including functions, delegates, and constructors).</summary>
 public abstract class MethodWrapper : ICallableWithKeywords
 {
-  protected MethodWrapper(bool isStatic)
-  {
-    IsStatic = isStatic;
-  }
-
-  public readonly bool IsStatic;
-
   public abstract int MinArgs { get; }
   public abstract int MaxArgs { get; }
 
@@ -293,6 +309,21 @@ public abstract class MethodWrapper : ICallableWithKeywords
   {
     throw new NotImplementedException();
   }
+
+  protected static void CheckArity(int argCount, int min, int max)
+  {
+    if(argCount < min)
+    {
+      throw new ArgumentException("Method expects at least " + min.ToString() + " arguments, but received " +
+                                  argCount.ToString());
+    }
+
+    if(max != -1 && argCount > max)
+    {
+      throw new ArgumentException("Method expects at most " + max.ToString() + " arguments, but received " +
+                                  argCount.ToString());
+    }
+  }
 }
 #endregion
 
@@ -300,7 +331,7 @@ public abstract class MethodWrapper : ICallableWithKeywords
 /// <summary>Base class of non-constructor method wrappers.</summary>
 public abstract class FunctionWrapper : MethodWrapper
 {
-  protected FunctionWrapper(IntPtr methodPtr, bool isStatic) : base(isStatic)
+  protected FunctionWrapper(IntPtr methodPtr)
   {
     MethodPtr = methodPtr;
   }
