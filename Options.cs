@@ -38,9 +38,10 @@ public class CompilerState
   public bool Debug = true;
   /// <summary>Whether to optimize the generated code or not.</summary>
   public bool Optimize = true;
-  /// <summary>Whether to promote values to a larger integer type if an overflow occurs in a checked region.
-  /// For instance, int+int may be converted to long, and long+long may be converted to <see cref="Integer"/>.
-  /// Enabling this option will result in less-efficient generated code, because the type of generated 
+  /// <summary>Whether to promote values to a larger integer type if an overflow occurs in a checked region. For
+  /// instance, int+int may be converted to long, and long+long may be converted to <see cref="Integer"/>. Enabling
+  /// this option will result in slower generated code, because the types of most arithmetic expressions cannot be
+  /// determined at compile time.
   /// </summary>
   public bool PromoteOnOverflow;
   /// <summary>Whether warnings will be treated as errors.</summary>

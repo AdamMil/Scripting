@@ -112,6 +112,7 @@ public sealed class TypeGenerator : ITypeInfo
     return DefineChainedConstructor(TypeWrapper.EmptyTypes);
   }
 
+  /// <summary>Defines a new public field with the given name and type.</summary>
   public FieldSlot DefineField(string name, ITypeInfo type)
   {
     return DefineField(FieldAttributes.Public, name, type);
@@ -515,6 +516,11 @@ public sealed class TypeGenerator : ITypeInfo
     CG.SetCustomAttribute(TypeBuilder, attributeBuilder);
   }
 
+  public override string ToString()
+  {
+    return TypeBuilder.ToString();
+  }
+
   public readonly AssemblyGenerator Assembly;
   public readonly TypeBuilder TypeBuilder;
 
@@ -622,6 +628,32 @@ public sealed class TypeGenerator : ITypeInfo
   public ITypeInfo[] GetInterfaces()
   {
     return baseType == null ? new ITypeInfo[0] : baseType.GetInterfaces();
+  }
+
+  public IMethodInfo GetMethod(string name, BindingFlags flags)
+  {
+    if(methods != null)
+    {
+      IMethodInfo methodFound = null;
+      bool found = false;
+
+      foreach(IMethodInfo method in methods)
+      {
+        if(string.Equals(name, method.Name, StringComparison.Ordinal) && MethodAttributesMatch(flags, method))
+        {
+          if(methodFound != null) return null;
+          else
+          {
+            methodFound = method;
+            found = true;
+          }
+        }
+      }
+
+      if(found) return methodFound;
+    }
+
+    return baseType == null || (flags & BindingFlags.DeclaredOnly) != 0 ? null : baseType.GetMethod(name, flags);
   }
 
   public IMethodInfo GetMethod(string name, BindingFlags flags, params ITypeInfo[] parameterTypes)
@@ -741,6 +773,7 @@ public sealed class TypeGenerator : ITypeInfo
   static bool ParametersMatch(ITypeInfo[] search, IParameterInfo[] method)
   {
     if(search.Length != method.Length) return false;
+
     for(int i=0; i<search.Length; i++)
     {
       if(search[i] != method[i].ParameterType)
@@ -748,12 +781,14 @@ public sealed class TypeGenerator : ITypeInfo
         return false;
       }
     }
+    
     return true;
   }
 
   static bool ParametersMatch(IParameterInfo[] search, IParameterInfo[] method)
   {
     if(search.Length != method.Length) return false;
+
     for(int i=0; i<search.Length; i++)
     {
       if(search[i].ParameterType != method[i].ParameterType)
@@ -761,6 +796,7 @@ public sealed class TypeGenerator : ITypeInfo
         return false;
       }
     }
+    
     return true;
   }
 

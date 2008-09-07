@@ -138,7 +138,7 @@ public sealed class AssemblyGenerator
     privates = new Privates(privates);
     try
     {
-      TypeGenerator tg = DefineType(TypeAttributes.Public|TypeAttributes.Sealed, "snippet$"+snippetIndex.Next,
+      TypeGenerator tg = DefineType(TypeAttributes.Public|TypeAttributes.Sealed, "snippet$"+snippetIndex.NextString,
                                     typeof(Snippet));
       privates.PrivateClass = tg; // we'll use the snippet itself as the private class
 
@@ -169,7 +169,7 @@ public sealed class AssemblyGenerator
     if(!privates.MethodWrappers.TryGetValue(signature, out wrapperType))
     {
       privates.MethodWrappers[signature] = wrapperType =
-        DotNetInterop.MakeMethodWrapper(GetPrivateClass(), signature, method, "mwrap$" + wrapperIndex.Next);
+        DotNetInterop.MakeMethodWrapper(GetPrivateClass(), signature, method, "mwrap$" + wrapperIndex.NextString);
     }
     
     return wrapperType;
@@ -190,6 +190,11 @@ public sealed class AssemblyGenerator
   public void Save()
   {
     Assembly.Save(OutFileName);
+  }
+
+  public override string ToString()
+  {
+    return Assembly.FullName;
   }
 
   /// <summary>Gets whether the assembly is currently generating a snippet.</summary>

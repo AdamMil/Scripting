@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Reflection;
 using System.Reflection.Emit;
 using Scripting.Emit;
@@ -12,7 +13,16 @@ namespace Scripting.AST
 #region Index
 public sealed class Index
 {
-  public long Next { get { lock(this) return index++; } }
+  public long Next 
+  {
+    get { lock(this) return index++; } 
+  }
+
+  public string NextString
+  {
+    get { return Next.ToString(CultureInfo.InvariantCulture); }
+  }
+
   long index;
 }
 #endregion
@@ -242,7 +252,7 @@ public abstract class ASTNode
     get { return contextType; }
   }
 
-  /// <summary>Gets or sets whether this node's value is constant and can be safely evaluated at compilet time.</summary>
+  /// <summary>Gets or sets whether this node's value is constant and can be safely evaluated at compile time.</summary>
   public bool IsConstant
   {
     get { return Is(Flag.Constant); }
@@ -263,6 +273,13 @@ public abstract class ASTNode
   {
     get { return Is(Flag.Tail); }
     set { Set(Flag.Tail, value); }
+  }
+
+  /// <summary>Gets or sets the namespace that defines the lexical scope in which this node is situated.</summary>
+  public LexicalScope Scope
+  {
+    get { return scope; }
+    set { scope = value; }
   }
 
   /// <summary>Gets the natural type of this node's value when emitted. If the value type is <see cref="Void"/>, this
@@ -343,12 +360,25 @@ public abstract class ASTNode
       diagnostic.ToMessage(CompilerState.Current.TreatWarningsAsErrors, SourceName, StartPosition, args));
   }
 
+  /// <summary>Called to check the semantics of the parse tree. This method is called before the corresponding method
+  /// on child nodes, while traveling down the parse tree.
+  /// </summary>
   public virtual void CheckSemantics()
   {
+    if(ContextType == null) throw new InvalidOperationException("ContextType has not been set.");
+    if(Scope == null) throw new InvalidOperationException("Scope has not been set.");
+
     if(!CG.IsConvertible(ValueType, ContextType))
     {
       AddMessage(CoreDiagnostics.CannotConvertType, CG.TypeName(ValueType), CG.TypeName(ContextType));
     }
+  }
+
+  /// <summary>Called to check the semantics of the parse tree. This method is called after the corresponding method
+  /// on child nodes, while traveling up the parse tree.
+  /// </summary>
+  public virtual void CheckSemantics2()
+  {
   }
 
   public virtual object Evaluate()
@@ -477,7 +507,7 @@ public abstract class ASTNode
   internal int index;
 
   [Flags]
-  enum Flag
+  internal enum Flag
   {
     /// <summary>Indicates whether the node's value is constant and can be evaluated at compile-time.</summary>
     Constant = 1,
@@ -487,6 +517,19 @@ public abstract class ASTNode
     Tail = 2,
     /// <summary>Indicates whether this node is contained within an exception handling block.</summary>
     InTry = 4,
+    /// <summary>Indicates that this node's cannot be assigned to.</summary>
+    ReadOnly = 8,
+  }
+
+  internal bool Is(Flag flag)
+  {
+    return (flags & flag) != 0;
+  }
+
+  internal void Set(Flag flag, bool on)
+  {
+    if(on) flags |= flag;
+    else flags &= ~flag;
   }
 
   void GetDescendants<T>(List<T> nodes) where T : ASTNode
@@ -502,18 +545,8 @@ public abstract class ASTNode
     }
   }
 
-  bool Is(Flag flag)
-  {
-    return (flags & flag) != 0;
-  }
-  
-  void Set(Flag flag, bool on)
-  {
-    if(on) flags |= flag;
-    else flags &= ~flag;
-  }
-
   ASTNodeCollection children;
+  LexicalScope scope;
   List<Attribute> attributes;
   ITypeInfo contextType;
   Flag flags;
@@ -528,20 +561,39 @@ public abstract class ASTNode
 public abstract class AssignableNode : ASTNode
 {
   public AssignableNode(bool isContainerNode) : base(isContainerNode) { }
+
+  /// <summary>Gets or sets whether this variable's value is read-only and cannot be modified after it has been
+  /// assigned.
+  /// </summary>
+  public bool IsReadOnly
+  {
+    get { return Is(Flag.ReadOnly); }
+    set { Set(Flag.ReadOnly, value); }
+  }
+
   public abstract bool IsSameSlotAs(ASTNode rhs);
-  public abstract void EvaluateSet(object newValue);
-  public abstract void EmitSet(CodeGenerator cg, ASTNode valueNode);
-  public abstract void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack);
+  public abstract void EvaluateSet(object newValue, bool initialize);
+  public abstract void EmitSet(CodeGenerator cg, ASTNode valueNode, bool initialize);
+  public abstract void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize);
 }
 #endregion
 
 #region AssignNode
 public class AssignNode : ASTNode
 {
-  public AssignNode(AssignableNode lhs, ASTNode rhs) : base(true)
+  public AssignNode(AssignableNode lhs, ASTNode rhs) : this(lhs, rhs, false) { }
+
+  public AssignNode(AssignableNode lhs, ASTNode rhs, bool initialize) : base(true)
   {
     if(lhs == null || rhs == null) throw new ArgumentNullException();
     Children.AddRange(lhs, rhs);
+    this.initialize = initialize;
+  }
+
+  /// <summary>Gets whether this assignment is initializing the value for the first time.</summary>
+  public bool Initializing
+  {
+    get { return initialize; }
   }
 
   public AssignableNode LHS
@@ -562,22 +614,27 @@ public class AssignNode : ASTNode
   public override void CheckSemantics()
   {
     base.CheckSemantics();
-
     if(LHS.IsSameSlotAs(RHS)) AddMessage(CoreDiagnostics.VariableAssignedToSelf);
+  }
+
+  public override void CheckSemantics2()
+  {
+    base.CheckSemantics2();
+    if(!Initializing && LHS.IsReadOnly) AddMessage(CoreDiagnostics.ReadOnlyVariableAssigned, LHS);
   }
 
   public override ITypeInfo Emit(CodeGenerator cg)
   {
     if(IsVoid(ContextType))
     {
-      LHS.EmitSet(cg, RHS);
+      LHS.EmitSet(cg, RHS, initialize);
       return TailReturn(cg, ContextType);
     }
     else
     {
       cg.EmitTypedNode(RHS, LHS.ValueType);
       cg.EmitDup();
-      LHS.EmitSet(cg, LHS.ValueType);
+      LHS.EmitSet(cg, LHS.ValueType, initialize);
       return TailReturn(cg, LHS.ValueType);
     }
   }
@@ -585,7 +642,7 @@ public class AssignNode : ASTNode
   public override object Evaluate()
   {
     object newValue = RHS.Evaluate();
-    LHS.EvaluateSet(newValue);
+    LHS.EvaluateSet(newValue, initialize);
     return newValue;
   }
 
@@ -595,6 +652,8 @@ public class AssignNode : ASTNode
     LHS.SetValueContext(TypeWrapper.Unknown); // the LHS won't be read, only written
     RHS.SetValueContext(LHS.ValueType);
   }
+
+  bool initialize;
 }
 #endregion
 
@@ -715,7 +774,7 @@ public class ContainerNode : NonExecutableNode
 }
 #endregion
 
-#region FunctionBaseNode
+#region FunctionNode
 public abstract class FunctionNode : ASTNode
 {
   public FunctionNode(string name, ITypeInfo returnType, ParameterNode[] parameters, ASTNode body) : base(true)
@@ -753,6 +812,10 @@ public abstract class FunctionNode : ASTNode
   /// new closure.
   /// </summary>
   public ClosureSlot[] Closures;
+  /// <summary>The maximum number of levels of ancestor closures that need to be accessible from this function's
+  /// closure, if the function creates a closure.
+  /// </summary>
+  public int MaxClosureReferenceDepth;
   public readonly int RequiredParameterCount, OptionalParameterCount;
   public readonly bool HasListParameter, HasDictParameter;
 
@@ -942,6 +1005,7 @@ public abstract class NonExecutableNode : ASTNode
   }
 
   public override void CheckSemantics() { }
+  public override void CheckSemantics2() { }
 
   public override ITypeInfo Emit(CodeGenerator cg)
   {
@@ -996,6 +1060,8 @@ public class OpNode : ASTNode
 }
 #endregion
 
+// TODO: perhaps a processor should be created to remove the options nodes, and push the option changes into a
+// decoration on the rest of the AST?
 #region OptionsNode
 public class OptionsNode : ASTNode
 {
@@ -1009,6 +1075,11 @@ public class OptionsNode : ASTNode
   public ASTNode Body
   {
     get { return Children[0]; }
+  }
+
+  public CompilerState CompilerState
+  {
+    get { return state; }
   }
 
   public override ITypeInfo ValueType
@@ -1070,11 +1141,11 @@ public class ParameterNode : NonExecutableNode
   public ParameterNode(string name, ITypeInfo valueType) : this(name, valueType, ParameterType.Normal, null) { }
   public ParameterNode(string name, ITypeInfo valueType, ParameterType paramType)
     : this(name, valueType, paramType, null) { }
-  public ParameterNode(string name, ITypeInfo valueType, ParameterType paramType, ASTNode defaultValue)
-    : base(true)
+
+  public ParameterNode(string name, ITypeInfo valueType, ParameterType paramType, ASTNode defaultValue) : base(true)
   {
     if(name == null || valueType == null) throw new ArgumentNullException();
-    Name          = name;
+    Variable      = new VariableNode(name);
     Type          = valueType;
     ParameterType = paramType;
     DefaultValue  = defaultValue;
@@ -1115,13 +1186,18 @@ public class ParameterNode : NonExecutableNode
     get { return parent == null ? null : (FunctionNode)parent.parent; }
   }
 
+  public string Name
+  {
+    get { return Variable.Name; }
+  }
+
   public override void SetValueContext(ITypeInfo desiredType)
   {
     base.SetValueContext(desiredType);
     if(DefaultValue != null) DefaultValue.SetValueContext(Type);
   }
 
-  public readonly string Name;
+  public readonly VariableNode Variable;
   public readonly ParameterType ParameterType;
   public readonly ITypeInfo Type;
   
@@ -1264,12 +1340,18 @@ public class ScriptFunctionNode : FunctionNode
     }
     else
     {
-      // create the function wrapper
+      // create and instantiate the wrapper class
       ITypeInfo wrapperType = cg.Assembly.GetMethodWrapper(method);
-      // instantiate it in the private class and store a reference to it
       cg.ILG.Emit(OpCodes.Ldftn, method.Method);
-      cg.EmitBool(true); // isStatic
-      cg.EmitNew(wrapperType, TypeWrapper.IntPtr, TypeWrapper.Bool);
+      if(method.IsStatic)
+      {
+        cg.EmitNew(wrapperType, TypeWrapper.IntPtr);
+      }
+      else
+      {
+        cg.ClosureSlot.EmitGet(cg);
+        cg.EmitNew(wrapperType, TypeWrapper.IntPtr, cg.ClosureSlot.Type);
+      }
       return TailReturn(cg, wrapperType);
     }
   }
@@ -1281,15 +1363,7 @@ public class ScriptFunctionNode : FunctionNode
   
   public IMethodInfo GetMethod(AssemblyGenerator ag)
   {
-    if(generatedMethod == null)
-    {
-      ScriptFunctionNode parentFunc = GetAncestor<ScriptFunctionNode>();
-      TypeGenerator containingClass = null;
-      if(parentFunc != null) containingClass = parentFunc.closureClass;
-      if(containingClass == null) containingClass = ag.GetPrivateClass();
-
-      generatedMethod = MakeDotNetMethod(containingClass);
-    }
+    if(generatedMethod == null) generatedMethod = MakeDotNetMethod(ag);
     return generatedMethod;
   }
 
@@ -1370,13 +1444,23 @@ public class ScriptFunctionNode : FunctionNode
     return allObject ? null : ParameterNode.GetTypes(GetParameterArray()); // return null if all are of type object
   }
 
-  IMethodInfo MakeDotNetMethod(TypeGenerator containingClass)
+  IMethodInfo MakeDotNetMethod(AssemblyGenerator ag)
   {
     MethodAttributes attributes = MethodAttributes.Public;
-    if(!CreatesClosure) attributes |= MethodAttributes.Static;
 
-    CodeGenerator methodCg = containingClass.DefineMethod(attributes, "lambda$" + currentIndex + Name, ReturnType,
-                                                          ParameterNode.GetTypes(GetParameterArray()));
+    TypeGenerator containingClass = null;
+    ScriptFunctionNode parentFunc = GetAncestor<ScriptFunctionNode>();
+    if(parentFunc != null) containingClass = parentFunc.closureClass;
+
+    if(containingClass == null) // TODO: we should only put functions on a closure object if they actually need to access closed variables
+    {
+      containingClass = ag.GetPrivateClass();
+      attributes |= MethodAttributes.Static;
+    }
+
+    CodeGenerator methodCg = containingClass.DefineMethod(attributes,
+                                               "lambda$" + currentIndex.ToString(CultureInfo.InvariantCulture) + Name,
+                                               ReturnType, ParameterNode.GetTypes(GetParameterArray()));
 
     // add names for the parameters
     MethodBuilderWrapper mb = (MethodBuilderWrapper)methodCg.Method;
@@ -1387,7 +1471,7 @@ public class ScriptFunctionNode : FunctionNode
 
     if(CreatesClosure)
     {
-      closureClass = methodCg.SetupClosure(Closures, false);
+      closureClass = methodCg.SetupClosure(Closures, MaxClosureReferenceDepth);
     }
 
     methodCg.EmitTypedNode(Body, ReturnType);
@@ -1420,13 +1504,8 @@ public class VariableNode : AssignableNode
 {
   public VariableNode(string name) : base(false)
   {
+    if(name == null) throw new ArgumentNullException();
     Name = name;
-  }
-
-  public VariableNode(string name, Slot slot) : base(false)
-  {
-    Name = name;
-    Slot = slot;
   }
 
   public readonly string Name;
@@ -1441,6 +1520,17 @@ public class VariableNode : AssignableNode
     }
   }
 
+  public override void CheckSemantics2()
+  {
+    base.CheckSemantics2();
+
+    if(Scope != null)
+    {
+      Symbol symbol = Scope.Get(Name);
+      if(symbol != null) IsReadOnly = symbol.DeclaringVariable.IsReadOnly;
+    }
+  }
+
   public override ITypeInfo Emit(CodeGenerator cg)
   {
     AssertValidSlot();
@@ -1450,16 +1540,16 @@ public class VariableNode : AssignableNode
     return TailReturn(cg, Slot.Type);
   }
 
-  public override void EmitSet(CodeGenerator cg, ASTNode valueNode)
+  public override void EmitSet(CodeGenerator cg, ASTNode valueNode, bool initialize)
   {
     AssertValidSlot();
-    Slot.EmitSet(cg, valueNode);
+    Slot.EmitSet(cg, valueNode, initialize);
   }
 
-  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack)
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize)
   {
     AssertValidSlot();
-    Slot.EmitSet(cg, typeOnStack);
+    Slot.EmitSet(cg, typeOnStack, initialize);
   }
 
   public override object Evaluate()
@@ -1468,10 +1558,10 @@ public class VariableNode : AssignableNode
     return Slot.EvaluateGet();
   }
 
-  public override void EvaluateSet(object newValue)
+  public override void EvaluateSet(object newValue, bool initialize)
   {
     AssertValidSlot();
-    Slot.EvaluateSet(newValue);
+    Slot.EvaluateSet(newValue, initialize);
   }
 
   public override bool IsSameSlotAs(ASTNode rhs)
@@ -1479,6 +1569,11 @@ public class VariableNode : AssignableNode
     AssertValidSlot();
     VariableNode rhsVar = rhs as VariableNode;
     return rhsVar != null && Slot.IsSameAs(rhsVar.Slot);
+  }
+
+  public override string ToString()
+  {
+    return Name;
   }
 
   void AssertValidSlot()

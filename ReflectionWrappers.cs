@@ -75,6 +75,7 @@ public interface ITypeInfo : IMemberInfo
   IConstructorInfo GetConstructor(BindingFlags flags, params ITypeInfo[] parameterTypes);
   IFieldInfo GetField(string name);
   ITypeInfo[] GetInterfaces();
+  IMethodInfo GetMethod(string name, BindingFlags flags);
   IMethodInfo GetMethod(string name, BindingFlags flags, params ITypeInfo[] parameterTypes);
   IMethodInfo[] GetMethods(BindingFlags flags);
   ITypeInfo GetNestedType(string name);
@@ -585,7 +586,15 @@ public class TypeWrapper : ITypeInfo
 
   public bool IsAssignableFrom(ITypeInfo type)
   {
-    return this.type.IsAssignableFrom(type.DotNetType);
+    // TypeBuilder.GetInterfaces(), which is used by Type.IsAssignableFrom(), fails to return the interfaces
+    // implemented on base classes, even though it says it does, so we'll check them ourselves if necessary
+    if(this.type.IsAssignableFrom(type.DotNetType)) return true;
+    else if(!this.type.IsInterface) return false;
+    else
+    {
+      TypeBuilder builder = type.DotNetType as TypeBuilder;
+      return builder != null && Array.IndexOf(builder.BaseType.GetInterfaces(), this.type) != -1;
+    }
   }
 
   public bool IsSubclassOf(ITypeInfo type)

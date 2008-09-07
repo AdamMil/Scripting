@@ -42,7 +42,6 @@
     <Compile Include="Integer.cs" />
     <Compile Include="Language.cs" />
     <Compile Include="Modules.cs" />
-    <Compile Include="Namespaces.cs" />
     <Compile Include="Operators.cs" />
     <Compile Include="Ops.cs" />
     <Compile Include="Options.cs" />
@@ -51,6 +50,7 @@
     <Compile Include="ReflectionWrappers.cs" />
     <Compile Include="Runtime.cs" />
     <Compile Include="Scanner.cs" />
+    <Compile Include="Scopes.cs" />
     <Compile Include="Slots.cs" />
     <Compile Include="Stages.cs" />
     <Compile Include="TypeGenerator.cs" />
