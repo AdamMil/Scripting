@@ -918,13 +918,14 @@ public sealed class ThisSlot : Slot
 #region TopLevelSlot
 public sealed class TopLevelSlot : Slot
 {
-  public TopLevelSlot(string name) : this(name, TypeWrapper.Unknown) { }
+  public TopLevelSlot(string name, bool readOnly) : this(name, TypeWrapper.Unknown, readOnly) { }
 
-  public TopLevelSlot(string name, ITypeInfo type)
+  public TopLevelSlot(string name, ITypeInfo type, bool readOnly)
   {
     if(name == null || type == null) throw new ArgumentNullException();
-    this.Name = name;
-    this.type = type;
+    this.Name     = name;
+    this.type     = type;
+    this.readOnly = readOnly;
   }
 
   public override bool CanGetAddr
@@ -949,8 +950,7 @@ public sealed class TopLevelSlot : Slot
 
   public override void EmitGet(CodeGenerator cg)
   {
-    EmitBinding(cg);
-    if(CompilerState.Current.Debug || !CompilerState.Current.Optimize) cg.EmitCall(typeof(Ops), "CheckBinding");
+    EmitBindingForGet(cg);
     cg.EmitFieldGet(valueField);
     cg.EmitUnsafeConversion(TypeWrapper.Object, type);
   }
@@ -958,7 +958,7 @@ public sealed class TopLevelSlot : Slot
   public override void EmitGetAddr(CodeGenerator cg)
   {
     if(type != typeof(object)) throw new NotSupportedException("Only the address of an Object slot can be retrieved.");
-    if(CompilerState.Current.Debug || !CompilerState.Current.Optimize) cg.EmitCall(typeof(Ops), "CheckBinding");
+    EmitBindingForGet(cg);
     cg.EmitFieldGetAddr(valueField);
   }
 
@@ -968,8 +968,7 @@ public sealed class TopLevelSlot : Slot
     cg.EmitSafeConversion(type, TypeWrapper.Object);
     Slot temp = cg.AllocLocalTemp(TypeWrapper.Object);
     temp.EmitSet(cg);
-    EmitBinding(cg);
-    if(!initialize) cg.EmitCall(typeof(Ops), "CheckBinding");
+    EmitBindingForSet(cg, initialize);
     temp.EmitGet(cg);
     cg.FreeLocalTemp(temp);
     cg.EmitFieldSet(valueField);
@@ -977,8 +976,7 @@ public sealed class TopLevelSlot : Slot
 
   public override void EmitSet(CodeGenerator cg, ASTNode valueNode, bool initialize)
   {
-    EmitBinding(cg);
-    if(!initialize) cg.EmitCall(typeof(Ops), "CheckBinding");
+    EmitBindingForSet(cg, initialize);
     cg.EmitTypedNode(valueNode, type);
     cg.EmitSafeConversion(type, TypeWrapper.Object);
     cg.EmitFieldSet(valueField);
@@ -986,8 +984,7 @@ public sealed class TopLevelSlot : Slot
 
   public override void EmitSet(CodeGenerator cg, Slot valueSlot, bool initialize)
   {
-    EmitBinding(cg);
-    if(!initialize) cg.EmitCall(typeof(Ops), "CheckBinding");
+    EmitBindingForSet(cg, initialize);
     cg.EmitTypedSlot(valueSlot, type);
     cg.EmitSafeConversion(type, TypeWrapper.Object);
     cg.EmitFieldSet(valueField);
@@ -1021,7 +1018,30 @@ public sealed class TopLevelSlot : Slot
     binding.EmitGet(cg);
   }
 
+  void EmitBindingForGet(CodeGenerator cg)
+  {
+    EmitBinding(cg);
+    if(CompilerState.Current.Debug || !CompilerState.Current.Optimize) cg.EmitCall(typeof(Ops), "CheckBindingForGet");
+  }
+
+  void EmitBindingForSet(CodeGenerator cg, bool initialize)
+  {
+    EmitBinding(cg);
+    if(!initialize)
+    {
+      cg.EmitCall(typeof(Ops), "CheckBindingForSet");
+    }
+    else
+    {
+      cg.EmitCall(typeof(Ops), "CheckBindingForInit");
+      cg.EmitDup();
+      cg.EmitBool(readOnly);
+      cg.EmitFieldSet(typeof(Binding), "ReadOnly");
+    }
+  }
+
   readonly ITypeInfo type;
+  readonly bool readOnly;
   Slot binding;
   
   static readonly FieldInfo valueField = typeof(Binding).GetField("Value");

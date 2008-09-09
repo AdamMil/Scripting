@@ -29,10 +29,12 @@ public class CompileTimeException : ApplicationException
   {
     SourceName = message.SourceName;
     Position   = message.Position;
+    ErrorCode  = message.Code;
   }
 
   public readonly FilePosition Position;
   public readonly string SourceName;
+  public readonly int ErrorCode;
 }
 #endregion
 
@@ -103,12 +105,21 @@ public abstract class RuntimeScriptException : ApplicationException
 }
 #endregion
 
+#region ReadOnlyVariableException
+/// <summary>Thrown when an attempt is made to change a read-only variable.</summary>
+public class ReadOnlyVariableException : RuntimeScriptException
+{
+  public ReadOnlyVariableException() : base("An attempt was made to change a read-only variable.") { }
+  public ReadOnlyVariableException(string variableName) : base("Variable '" + variableName + "' is read-only.") { }
+}
+#endregion
+
 #region UndefinedVariableException
 /// <summary>Thrown when an attempt is made to access an undefined variable.</summary>
 public class UndefinedVariableException : RuntimeScriptException
 {
   public UndefinedVariableException() : base("An attempt was made to access an undefined variable.") { }
-  public UndefinedVariableException(string variableName) : base("Use of unbound variable: " + variableName) { }
+  public UndefinedVariableException(string variableName) : base("Use of unbound variable '" + variableName + "'") { }
 }
 #endregion
 #endregion
@@ -123,22 +134,23 @@ public enum OutputMessageType
 /// <summary>An output message from the compiler.</summary>
 public class OutputMessage
 {
-  public OutputMessage(OutputMessageType type, string message)
+  public OutputMessage(OutputMessageType type, string message, int code)
   {
     this.Message = message;
     this.Type    = type;
+    this.Code    = code;
   }
 
-  public OutputMessage(OutputMessageType type, string message, string sourceName, FilePosition position)
-    : this(type, message)
+  public OutputMessage(OutputMessageType type, string message, int code, string sourceName, FilePosition position)
+    : this(type, message, code)
   {
     this.SourceName = sourceName;
     this.Position   = position;
   }
 
-  public OutputMessage(OutputMessageType type, string message, string sourceName, FilePosition position,
+  public OutputMessage(OutputMessageType type, string message, int code, string sourceName, FilePosition position,
                        Exception exception)
-    : this(type, message, sourceName, position)
+    : this(type, message, code, sourceName, position)
   {
     this.Exception = exception;
   }
@@ -157,7 +169,10 @@ public class OutputMessage
   public string Message;
   /// <summary>The exception that caused this error, if any.</summary>
   public Exception Exception;
-  
+
+  /// <summary>A numerical code describing the output message.</summary>
+  public int Code;
+
   /// <summary>The type of output message.</summary>
   public OutputMessageType Type;
 }
@@ -203,7 +218,7 @@ public class OutputMessageCollection : Collection<OutputMessage>
 
 #region Diagnostic
 /// <summary>This class represents a single diagnostic message, and contains static members for all valid messages.</summary>
-public struct Diagnostic
+public sealed class Diagnostic
 {
   public Diagnostic(OutputMessageType type, string prefix, int code, int level, string format)
   {
@@ -265,7 +280,7 @@ public struct Diagnostic
   {
     OutputMessageType type = this.type == OutputMessageType.Warning && treatWarningAsError
       ? OutputMessageType.Error : this.type;
-    return new OutputMessage(type, ToString(treatWarningAsError, args), sourceName, position);
+    return new OutputMessage(type, ToString(treatWarningAsError, args), Code, sourceName, position);
   }
 
   /// <summary>Converts this diagnostic to a message suitable for use in an <see cref="OutputMessage"/>.</summary>
@@ -331,16 +346,17 @@ public static class CoreDiagnostics
 {
   public static readonly Diagnostic InternalCompilerError     = Error(1, "Internal compiler error: {0}");
   // scanner
-  public static readonly Diagnostic ExpectedHexDigit          = Error(51, "Expected hex digit, but received '{0}'");
-  public static readonly Diagnostic ExpectedLetter            = Error(52, "Expected letter, but received '{0}'");
+  public static readonly Diagnostic ExpectedHexDigit          = Error(51, "Expected a hex digit, but found '{0}'");
+  public static readonly Diagnostic ExpectedLetter            = Error(52, "Expected a letter, but found '{0}'");
   public static readonly Diagnostic UnknownEscapeCharacter    = Error(53, "Unknown escape character '{0}'");
   public static readonly Diagnostic UnterminatedComment       = Error(54, "Unterminated multiline comment");
   public static readonly Diagnostic UnterminatedStringLiteral = Error(55, "Unterminated string literal");
   public static readonly Diagnostic UnexpectedCharacter       = Error(56, "Unexpected character '{0}'");
   public static readonly Diagnostic UnexpectedEOF             = Error(57, "Unexpected end of file");
+  public static readonly Diagnostic ExpectedNumber            = Error(58, "Expected a number, but found '{0}'");
   // parser
   public static readonly Diagnostic UnexpectedToken           = Error(101, "Syntax error, unexpected token '{0}'");
-  public static readonly Diagnostic ExpectedSyntax            = Error(102, "Syntax error, expected '{0}' but received '{1}'");
+  public static readonly Diagnostic ExpectedSyntax            = Error(102, "Syntax error, expected '{0}' but found '{1}'");
   // syntax checking
   public static readonly Diagnostic VariableRedefined         = Error(201, "A variable named '{0}' is already defined in this scope");
   public static readonly Diagnostic UnassignedVariableUsed    = Error(202, "Use of unassigned variable '{0}'");

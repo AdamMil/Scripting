@@ -376,7 +376,8 @@ public class ScopeDecorator : PrefixVisitor
     if(string.IsNullOrEmpty(var.Name)) throw new ArgumentException("Variable name cannot be empty.");
 
     // if not, assume it's a global variable reference and insert a binding for it.
-    Binding globalBinding = new Binding(var, new TopLevelSlot(var.Name), true);
+    bool allowRedefinition = ((NetLispCompilerState)CurrentOptions).AllowRedefinition;
+    Binding globalBinding = new Binding(var, new TopLevelSlot(var.Name, !allowRedefinition), true);
     bindings.Insert(0, new KeyValuePair<string,Binding>(var.Name, globalBinding));
 
     if(functions != null) // since we inserted a binding at index 0, we need to update the function binding indices

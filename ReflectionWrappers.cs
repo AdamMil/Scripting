@@ -674,6 +674,7 @@ public class TypeWrapper : ITypeInfo
   public static readonly TypeWrapper Double   = Get(typeof(double));
   public static readonly TypeWrapper Complex  = Get(typeof(Runtime.Complex));
   public static readonly TypeWrapper Rational = Get(typeof(Runtime.Rational));
+  public static readonly TypeWrapper ComplexRational = Get(typeof(Runtime.ComplexRational));
   public static readonly TypeWrapper String   = Get(typeof(string));
   public static readonly TypeWrapper Object   = Get(typeof(object));
   public static readonly TypeWrapper IntPtr   = Get(typeof(IntPtr));

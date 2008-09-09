@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using Scripting.Runtime;
 using NUnit.Framework;
+using AdamMil.Tests;
 
 namespace Scripting.Tests
 {
@@ -54,6 +55,9 @@ public sealed class IntegerTests
 
     i = Integer.Parse("-1000");
     Assert.IsTrue(i == -1000);
+
+    i = Integer.Parse("2e5", 16);
+    Assert.IsTrue(i == 741);
 
     Assert.IsTrue(ReallyBig == Integer.Parse("1000000000000000000000000"));
     Assert.IsTrue(-ReallyBig == Integer.Parse("-1000000000000000000000000"));
@@ -294,22 +298,39 @@ public sealed class IntegerTests
     IConvertible i = Billion;
     Assert.IsTrue(i.ToBoolean(null));
     Assert.IsFalse(((IConvertible)(Integer.One+Integer.MinusOne)).ToBoolean(null));
-    Assert.IsTrue(i.ToDecimal(null) == 1000000000);
-    Assert.IsTrue(i.ToDouble(null) == 1000000000);
-    Assert.IsTrue(i.ToInt32(null) == 1000000000);
-    Assert.IsTrue(i.ToInt64(null) == 1000000000);
-    Assert.IsTrue(i.ToSingle(null) == 1000000000);
-    Assert.IsTrue(i.ToUInt32(null) == 1000000000);
-    Assert.IsTrue(i.ToUInt64(null) == 1000000000);
+    Assert.AreEqual(1000000000, i.ToDecimal(null));
+    Assert.AreEqual(1000000000, i.ToDouble(null));
+    Assert.AreEqual(1000000000, i.ToInt32(null));
+    Assert.AreEqual(-1000000000, ((IConvertible)(-Billion)).ToInt32(null));
+    Assert.AreEqual(1000000000, i.ToInt64(null));
+    Assert.AreEqual(1000000000, i.ToSingle(null));
+    Assert.AreEqual(1000000000, i.ToUInt32(null));
+    Assert.AreEqual(1000000000, i.ToUInt64(null));
     
-    Assert.IsTrue(Integer.ToDecimal(Trillion) == 1000000000000);
-    Assert.IsTrue(Integer.ToDouble(Trillion) == 1000000000000);
-    Assert.IsTrue(Integer.ToInt64(Trillion) == 1000000000000);
-    Assert.IsTrue(Integer.ToSingle(Trillion) == 1000000000000);
-    Assert.IsTrue(Integer.ToUInt64(Trillion) == 1000000000000);
-    
-    Assert.IsTrue(Integer.ToDouble(new Integer(double.MaxValue)) == Math.Floor(double.MaxValue));
-    Assert.IsTrue(Integer.ToDouble(new Integer(double.MinValue)) == Math.Ceiling(double.MinValue));
+    Assert.AreEqual(-1000000000000, Integer.ToDecimal(-Trillion));
+    Assert.AreEqual(-1000000000000, Integer.ToDouble(-Trillion));
+    Assert.AreEqual(-1000000000000, Integer.ToInt64(-Trillion));
+    Assert.AreEqual((float)-1000000000000, Integer.ToSingle(-Trillion));
+    Assert.AreEqual(1000000000000, Integer.ToUInt64(Trillion));
+    Assert.AreEqual(-1000000000000, Integer.ToInt64(-Trillion));
+
+    Assert.AreEqual(100, Integer.ToByte(100));
+    Assert.AreEqual(-100, Integer.ToSByte(-100));
+    Assert.AreEqual(-1000, Integer.ToInt16(-1000));
+
+    Assert.AreEqual(short.MinValue, Integer.ToInt16(short.MinValue));
+    Assert.AreEqual(int.MinValue, Integer.ToInt32(int.MinValue));
+    Assert.AreEqual(long.MinValue, Integer.ToInt64(long.MinValue));
+
+    Assert.AreEqual(Math.Floor(double.MaxValue), Integer.ToDouble(new Integer(double.MaxValue)));
+    Assert.AreEqual(Math.Ceiling(double.MinValue), Integer.ToDouble(new Integer(double.MinValue)));
+
+    TestHelpers.TestException<OverflowException>(delegate { Integer.ToInt16(short.MaxValue+1); });
+    TestHelpers.TestException<OverflowException>(delegate { Integer.ToInt32((long)int.MaxValue+1); });
+    TestHelpers.TestException<OverflowException>(delegate { Integer.ToInt64(new Integer(long.MaxValue)+1); });
+    TestHelpers.TestException<OverflowException>(delegate { Integer.ToInt16(short.MinValue-1); });
+    TestHelpers.TestException<OverflowException>(delegate { Integer.ToInt32((long)int.MinValue-1); });
+    TestHelpers.TestException<OverflowException>(delegate { Integer.ToInt64(new Integer(long.MinValue)-1); });
   }
   #endregion
   
@@ -318,6 +339,7 @@ public sealed class IntegerTests
   public void Test99Miscellaneous()
   {
     Assert.IsTrue(Integer.Abs(Billion) == Billion);
+    Assert.IsTrue(Integer.Abs(-Billion) == Billion);
     Assert.IsTrue(Integer.Abs(new Integer(-50)) == 50);
 
     Assert.IsTrue(Integer.Pow(Trillion, 2) == ReallyBig);

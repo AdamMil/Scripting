@@ -47,6 +47,12 @@ public class CompilerState
   /// <summary>Whether warnings will be treated as errors.</summary>
   public bool TreatWarningsAsErrors;
 
+  /// <summary>Removes all compiler states from the stack.</summary>
+  public static void Clear()
+  {
+    StateStack.Clear();
+  }
+
   /// <summary>Pushes a new compler state onto the stack using the language and options of the current state. The
   /// message collection will be reused for the new state, allowing messages added to either state to show up in both.
   /// </summary>

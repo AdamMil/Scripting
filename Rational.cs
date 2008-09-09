@@ -3,12 +3,12 @@ using System;
 namespace Scripting.Runtime
 {
 
-public struct Rational : IConvertible, IComparable<Rational>, ICloneable
+public sealed class Rational : IConvertible, IComparable<Rational>, ICloneable
 {
-  // TODO: unfortunately, the default constructor creates an invalid structure. what should we do about that?
-
   public Rational(int i) : this(new Integer(i)) { }
   public Rational(long i) : this(new Integer(i)) { }
+  public Rational(uint i) : this(new Integer(i)) { }
+  public Rational(ulong i) : this(new Integer(i)) { }
 
   public Rational(Integer i)
   {
@@ -54,12 +54,12 @@ public struct Rational : IConvertible, IComparable<Rational>, ICloneable
     exponent = shift-exponent+1;
     if(exponent < 0)
     {
-      numerator  *= Integer.Pow(new Integer(2), (uint)-exponent);
+      numerator  *= Integer.Pow(2, (uint)-exponent);
       denominator = Integer.One;
     }
     else
     {
-      denominator = Integer.Pow(new Integer(2), (uint)exponent);
+      denominator = Integer.Pow(2, (uint)exponent);
     }
 
     if(d < 0) numerator = -numerator;
@@ -518,6 +518,16 @@ public struct Rational : IConvertible, IComparable<Rational>, ICloneable
   public static bool operator!=(long a, Rational b) { return b.numerator != a || b.denominator != 1; }
   public static bool operator!=(ulong a, Rational b) { return b.numerator != a || b.denominator != 1; }
   public static bool operator!=(double a, Rational b) { return new Rational(a) != b; }
+  #endregion
+
+  #region Implicit conversions
+  public static implicit operator Rational(int i) { return new Rational(i); }
+  public static implicit operator Rational(long i) { return new Rational(i); }
+  public static implicit operator Rational(uint i) { return new Rational(i); }
+  public static implicit operator Rational(ulong i) { return new Rational(i); }
+  public static implicit operator Rational(Integer i) { return new Rational(i); }
+  public static implicit operator Rational(float f) { return new Rational(f); }
+  public static implicit operator Rational(double d) { return new Rational(d); }
   #endregion
   #endregion
 

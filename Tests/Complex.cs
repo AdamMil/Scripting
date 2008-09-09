@@ -1,6 +1,7 @@
 using System;
 using Scripting.Runtime;
 using NUnit.Framework;
+using AdamMil.Tests;
 
 namespace Scripting.Tests
 {
@@ -86,23 +87,10 @@ public sealed class ComplexTests
   [Test]
   public void Test04Exceptions()
   {
-    TestException<DivideByZeroException>(delegate() { Complex c = new Complex(2) / new Complex(0, 0); });
-    TestException<ArgumentOutOfRangeException>(delegate() { Complex.Pow(0, new Complex(-1, 0)); });
+    TestHelpers.TestException<DivideByZeroException>(delegate() { Complex c = new Complex(2) / new Complex(0, 0); });
+    TestHelpers.TestException<ArgumentOutOfRangeException>(delegate() { Complex.Pow(0, new Complex(-1, 0)); });
   }
   #endregion
-
-  delegate void CodeBlock();
-  static void TestException<T>(CodeBlock block) where T : Exception
-  {
-    bool threw = false;
-    try { block(); }
-    catch(Exception ex)
-    {
-      if(!typeof(T).IsAssignableFrom(ex.GetType())) throw;
-      threw = true;
-    }
-    Assert.IsTrue(threw);
-  }
 }
 
 } // namespace Scripting.Tests
