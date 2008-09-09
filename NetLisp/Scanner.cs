@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -13,7 +14,7 @@ static class TokenString
 {
   public const string Literal="LITERAL", Symbol="SYMBOL", Vector="VECTOR", LParen="LPAREN", RParen="RPAREN",
                       LBracket="LBRACKET", RBracket="RBRACKET", LCurly="LCURLY", RCurly="RCURLY",
-                      Quote="QUOTE", BackQuote="BACKQUOTE", Period="PERIOD";
+                      Quote="QUOTE", BackQuote="BACKQUOTE", Period="PERIOD", DatumComment="DATUMCOMMENT";
 }
 
 public class Scanner : ScannerBase<NetLispCompilerState>
@@ -40,10 +41,13 @@ public class Scanner : ScannerBase<NetLispCompilerState>
       }
       else if(Char == '#')
       {
-        switch(NextChar())
+        NextChar();
+
+        char lower = char.ToLowerInvariant(Char);
+        switch(lower)
         {
           case 't': case 'f': // literal true and false
-            token.Value = (Char == 't');
+            token.Value = (lower == 't');
             token.Type  = TokenString.Literal;
             NextChar();
             break;
@@ -51,85 +55,89 @@ public class Scanner : ScannerBase<NetLispCompilerState>
           case '\\': // character literal
           {
             NextChar();
-            if(char.IsLetter(Char))
+
+            StringBuilder sb = new StringBuilder();
+            do
             {
-              StringBuilder sb = new StringBuilder();
-              do
-              {
-                sb.Append(Char);
-              } while(!IsDelimiter(NextChar()));
+              sb.Append(Char);
+            } while(!IsDelimiter(NextChar()));
 
-              string name = sb.ToString();
-              char literal;
+            char literal;
 
-              #region Character names
-              if(name.Length == 1) // simple character literal (#\x == 'x')
-              {
-                literal = name[0];
-              }
-              // control codes (#\c-m == ^M)
-              else if(name.StartsWith("c-", StringComparison.InvariantCultureIgnoreCase) && name.Length == 3)
-              {
-                int ordinal = char.ToUpper(name[2]) - 64;
-                if(ordinal < 1 || ordinal > 26)
-                {
-                  AddMessage(NetLispDiagnostics.InvalidControlCode, token.Start, name);
-                  literal = '?'; // recover by giving an arbitrary value
-                }
-                else
-                {
-                  literal = (char)ordinal;
-                }
-              }
-              else // named characters
-              {
-                switch(name.ToLowerInvariant())
-                {
-                  case "space": literal = ' '; break;
-                  case "lf": case "linefeed": case "newline": literal = '\n'; break;
-                  case "cr": case "return": literal = '\r'; break;
-                  case "tab": case "ht": literal = '\t'; break;
-                  case "bs": case "backspace": literal = (char)8; break;
-                  case "esc": case "altmode": literal = (char)27; break;
-                  case "del": case "rubout": literal = (char)127; break;
-                  case "nul": literal = (char)0; break;
-                  case "soh": literal = (char)1; break;
-                  case "stx": literal = (char)2; break;
-                  case "etx": literal = (char)3; break;
-                  case "eot": literal = (char)4; break;
-                  case "enq": literal = (char)5; break;
-                  case "ack": literal = (char)6; break;
-                  case "bel": literal = (char)7; break;
-                  case "vt":  literal = (char)11; break;
-                  case "ff": case "page": literal = (char)12; break;
-                  case "so":  literal = (char)14; break;
-                  case "si":  literal = (char)15; break;
-                  case "dle": literal = (char)16; break;
-                  case "dc1": literal = (char)17; break;
-                  case "dc2": literal = (char)18; break;
-                  case "dc3": literal = (char)19; break;
-                  case "dc4": literal = (char)20; break;
-                  case "nak": literal = (char)21; break;
-                  case "syn": literal = (char)22; break;
-                  case "etb": literal = (char)23; break;
-                  case "can": literal = (char)24; break;
-                  case "em":  literal = (char)25; break;
-                  case "sub": case "call": literal = (char)26; break;
-                  case "fs":  literal = (char)28; break;
-                  case "gs":  literal = (char)29; break;
-                  case "rs":  literal = (char)30; break;
-                  case "us": case "backnext": literal = (char)31; break;
-                  default:
-                    AddMessage(NetLispDiagnostics.UnknownCharacterName, token.Start, name);
-                    literal = '?';
-                    break;
-                }
-              }
-              #endregion
-              
-              token.Type  = TokenString.Literal;
-              token.Value = literal;
+            #region Character names
+            if(sb.Length == 1) // simple character literal (#\x == 'x')
+            {
+              literal = sb[0];
             }
+            // hex form (#\x0041 == 'A') 
+            else if(sb.Length > 1 && sb[0] == 'x' && IsHexDigit(sb[1]))
+            {
+              int value = 0;
+              bool error = false;
+
+              for(int i=1; i<sb.Length; i++)
+              {
+                if(!IsHexDigit(sb[i]))
+                {
+                  error = true;
+                  break;
+                }
+
+                value = (value << 4) + GetHexValue(sb[i]);
+                
+                if(value > 0x10FFFF)
+                {
+                  error = true;
+                  break;
+                }
+              }
+
+              if(!error && value >= 0xD800 && value <= 0xDFFF) error = true;
+
+              if(error)
+              {
+                AddMessage(NetLispDiagnostics.InvalidHexCharacter, sb);
+                literal = '?';
+              }
+              else
+              {
+                string u16str = char.ConvertFromUtf32(value);
+                if(u16str.Length != 1) throw new NotImplementedException("Multi-char character literal");
+                literal = u16str[0];
+              }
+            }
+            else // named characters
+            {
+              string name = sb.ToString();
+              switch(name)
+              {
+                case "space": literal = ' '; break;
+                case "lf":
+                case "linefeed":
+                case "newline": literal = '\n'; break;
+                case "cr":
+                case "return": literal = '\r'; break;
+                case "tab": literal = '\t'; break;
+                case "bs":
+                case "backspace": literal = (char)8; break;
+                case "esc": literal = (char)27; break;
+                case "del":
+                case "delete": literal = (char)127; break;
+                case "nul": literal = (char)0; break;
+                case "alarm": literal = (char)7; break;
+                case "vtab": literal = (char)11; break;
+                case "ff":
+                case "page": literal = (char)12; break;
+                default:
+                  AddMessage(NetLispDiagnostics.UnknownCharacterName, token.Start, name);
+                  literal = '?';
+                  break;
+              }
+            }
+            #endregion
+            
+            token.Type  = TokenString.Literal;
+            token.Value = literal;
             break;
           }
 
@@ -186,23 +194,48 @@ public class Scanner : ScannerBase<NetLispCompilerState>
             NextChar();
             break;
 
-          case '*': // start of an extended comment, eg #* this is a comment *#
+          case '|': // start of an nestable block comment, eg #| this is a comment |#
+          {
+            int depth = 1;
+            NextChar();
+
             while(true)
             {
-              if(NextChar() == '*' && NextChar() == '#') break;
-              if(Char == 0)
+              if(Char == '#')
+              {
+                if(NextChar() == '|') depth++;
+                else continue;
+              }
+              else if(Char == '|')
+              {
+                if(NextChar() == '#')
+                {
+                  if(--depth == 0) break;
+                }
+                else continue;
+              }
+              else if(Char == 0)
               {
                 AddMessage(CoreDiagnostics.UnterminatedComment, token.Start);
                 break;
               }
+
+              NextChar();
             }
+
             NextChar();
             continue; // restart the token search
+          }
 
           case 'b': case 'o': case 'd': case 'x': case 'i': case 'e': // binary, octal, hex, exact, inexact numbers
             ReadNumber(ref token);
             break;
         
+          case ';': // beginning of a datum comment
+            NextChar();
+            token.Type = TokenString.DatumComment;
+            break;
+
           case '<':
             AddMessage(NetLispDiagnostics.EncounteredUnreadable, token.Start);
             while(true) // recover by skipping to the next (assuming the string looks like #<...>)
@@ -237,7 +270,9 @@ public class Scanner : ScannerBase<NetLispCompilerState>
           }
           else if(c == '\\')
           {
-            c = GetEscapeChar();
+            char? ec = GetEscapeChar();
+            if(!ec.HasValue) continue;
+            c = ec.Value;
           }
           else if(c == 0)
           {
@@ -265,11 +300,11 @@ public class Scanner : ScannerBase<NetLispCompilerState>
           case '\'': token.Type = TokenString.Quote; break;
           case '`':  token.Type = TokenString.BackQuote; break;
 
-          case ';': // single-line comment
+          case ';': // single-line comment runs until EOL, 
             while(true)
             {
               NextChar();
-              if(Char == '\n' || Char == 0) break;
+              if(IsEOL(Char) || Char == 0) break;
             }
             continue; // restart token search
 
@@ -313,10 +348,10 @@ public class Scanner : ScannerBase<NetLispCompilerState>
   }
   
   /*
-    \newline  Ignored
+    \<lf>     Ignored
+    \<ws><lf> Ignored
     \\        Backslash
     \"        Double quotation mark
-    \'        Single quotation mark
     \n        Newline
     \t        Tab
     \r        Carriage return
@@ -325,17 +360,14 @@ public class Scanner : ScannerBase<NetLispCompilerState>
     \a        Bell
     \f        Form feed
     \v        Vertical tab
-    \xHH      Up to 2 hex digits -> byte value
-    \uHHHH    Up to 4 hex digits -> 16-bit unicode value
-    \cC       Control code (eg, \cC is ctrl-c)
+    \xHH;     Semicolon-terminated hex digits -> character value
   */
-  char GetEscapeChar()
+  char? GetEscapeChar()
   {
     char c = NextChar();
     switch(c)
     {
       case '\"': return '\"';
-      case '\'': return '\'';
       case 'n':  return '\n';
       case 't':  return '\t';
       case 'r':  return '\r';
@@ -346,44 +378,61 @@ public class Scanner : ScannerBase<NetLispCompilerState>
       case 'v':  return '\v';
       case '\\': return '\\';
 
-      case 'x': case 'u':
+      case 'x':
       {
-        int num = 0;
-        for(int i=0,limit=(c=='x' ? 2 : 4); i<limit; i++)
+        StringBuilder sb = new StringBuilder();
+        int value = 0;
+        bool gotDigit = false, error = false;
+
+        while(true)
         {
-          SaveState();
           c = NextChar();
-          if(char.IsDigit(c))
+          sb.Append(c);
+
+          if(IsHexDigit(c))
           {
-            num = (num<<4) | (c-'0');
+            value = (value << 4) + GetHexValue(c);
+            if(value > 0x10FFFF) error = true;
+            gotDigit = true;
           }
-          else if((c<'A' || c>'F') && (c<'a' || c>'f'))
-          {
-            if(i == 0) AddMessage(CoreDiagnostics.ExpectedHexDigit, Diagnostic.CharLiteral(c));
-            RestoreState();
-            break;
-          }
+          else if(c == ';') break;
           else
           {
-            num = (num<<4) | (char.ToUpperInvariant(c)-'A'+10);
+            error = true;
+            break;
           }
         }
-        return (char)num;
-      }
 
-      case 'c':
-        c = char.ToUpperInvariant(NextChar());
-        if(c<'A' || c>'Z')
+        if(!gotDigit || value >= 0xD800 && value <= 0xDFFF) error = true;
+
+        if(error)
         {
-          AddMessage(CoreDiagnostics.ExpectedLetter, Diagnostic.CharLiteral(c));
+          AddMessage(NetLispDiagnostics.InvalidHexEscape, sb.ToString());
           return '?';
         }
         else
         {
-          return (char)(c-64);
+          string u16str = char.ConvertFromUtf32(value);
+          if(u16str.Length != 1) throw new NotImplementedException("Multi-char character literal");
+          return u16str[0];
         }
+      }
 
       default:
+        if(IsEOL(c)) return null; // if it's an EOL character, that's a line continuation
+
+        if(char.IsWhiteSpace(c)) // if it's whitespace followed by an EOL character, that's also a line continuation
+        {
+          SaveState();
+          char tc;
+          do
+          {
+            tc = NextChar();
+            if(IsEOL(tc)) return null;
+          } while(char.IsWhiteSpace(tc));
+          RestoreState();
+        }
+
         AddMessage(CoreDiagnostics.UnknownEscapeCharacter, c);
         return '?';
     }
@@ -391,52 +440,70 @@ public class Scanner : ScannerBase<NetLispCompilerState>
 
   void ReadNumber(ref Token token)
   {
-    int  radix = 10;
-    char exact = '?';
+    // at this point, the current character is a digit or one of the following characters: .+-bodxieBODXIE
+    // if it's a letter, then it followed a # mark and the result must be a valid number (or an error will occur).
+    // otherwise, if it's not a valid number, then it's an identifier
 
+    // read the entire thing into a stringbuilder
     StringBuilder sb = new StringBuilder();
-    while(!IsDelimiter(Char))
-    {
-      sb.Append(Char);
-      NextChar();
-    }
+    do sb.Append(Char); while(!IsDelimiter(NextChar()));
 
-    if(sb[0] == '.' || sb[0] == '-' || sb[0] == '+')
+    // we can quickly determine if it's the period token, or the symbols - or +, so do that
+    if(sb.Length == 1 && (sb[0] == '.' || sb[0] == '-' || sb[0] == '+'))
     {
-      if(sb.Length == 1)
+      if(sb[0] == '.')
       {
-        if(sb[0] == '.')
-        {
-          token.Type = TokenString.Period;
-          return;
-        }
-        else
-        {
-          token.Value = sb.ToString();
-          token.Type  = TokenString.Symbol;
-          return;
-        }
+        token.Type = TokenString.Period;
+        return;
+      }
+      else
+      {
+        token.Value = sb.ToString();
+        token.Type  = TokenString.Symbol;
+        return;
       }
     }
 
     string numString;
+    int radix = 0;
+    char exact = '?';
+    bool required;
 
-    if(!char.IsLetter(sb[0]))
+    token.Type  = TokenString.Literal;
+
+    if(!char.IsLetter(sb[0])) // if it doesn't begin with a letter, then it's either a number or a symbol like 1+
     {
       numString = sb.ToString();
+      required  = false;
     }
-    else
+    else // otherwise, it begins with numeric flags, so it must be a number.
     {
+      token.Value = 0;
+      required = true;
+
       int i;
-      for(i=0; i<sb.Length; i++)
+      for(i=0; i<sb.Length; i++) // read the flags
       {
         switch(sb[i])
         {
-          case 'b': radix = 2; break;
-          case 'o': radix = 8; break;
-          case 'd': radix = 10; break;
-          case 'x': radix = 16; break;
-          case 'e': case 'i': exact = sb[i]; break;
+          case 'b': case 'd': case 'o': case 'x':
+            if(radix != 0)
+            {
+              AddMessage(NetLispDiagnostics.MultipleRadixFlags, "#"+sb.ToString());
+              return;
+            }
+            radix = sb[i] == 'x' ? 16 : sb[i] == 'o' ? 8 : sb[i] == 'b' ? 2 : 10;
+            break;
+
+          case 'e': case 'i':
+            if(exact != '?')
+            {
+              AddMessage(NetLispDiagnostics.MultipleExactnessFlags, "#"+sb.ToString());
+              return;
+            }
+            exact = sb[i];
+            break;
+
           default: goto doneWithFlags;
         }
       }
@@ -445,54 +512,86 @@ public class Scanner : ScannerBase<NetLispCompilerState>
       numString = sb.ToString(i, sb.Length-i);
     }
 
-    token.Type = TokenString.Literal;
+    if(radix == 0) radix = 10;
 
-    Match m = (radix == 10 ? decNum : radix == 16 ? hexNum : radix == 8 ? octNum : binNum).Match(numString);
+    // numString has been set to what should be a number
+    Match m = (radix == 10 ? decNumRe : radix == 16 ? hexNumRe : radix == 8 ? octNumRe : binNumRe).Match(numString);
     if(!m.Success) // if it not a valid number, then assume it's a symbol
     {
-      token.Value = numString;
+      if(required) // but if a number was required in this position, report an error
+      {
+        AddMessage(CoreDiagnostics.ExpectedNumber, "#" + sb.ToString());
+        return;
+      }
+
       token.Type  = TokenString.Symbol;
+      token.Value = numString;
       return;
     }
 
-    if(m.Groups["den"].Success) // if the number has a denominator (meaning that it's a fraction)
+    if(m.Groups["special"].Success)
     {
-      if(exact == 'i')
-      {
-        token.Value = Convert.ToDouble(ParseInteger(m.Groups["num"].Value, radix)) /
-                      Convert.ToDouble(ParseInteger(m.Groups["den"].Value, radix));
-      }
-      else
-      {
-        token.Value = new Rational(Integer.Parse(m.Groups["num"].Value, radix),
-                                   Integer.Parse(m.Groups["den"].Value, radix));
-      }
-      return;
+      string special = m.Groups["special"].Value;
+      token.Value = special[1] == 'n' ? double.NaN :
+                                      special[0] == '-' ? double.NegativeInfinity : double.PositiveInfinity;
     }
-    
-    object numerator = ParseNumber(m.Groups["num"].Value, m.Groups["exp"].Value, radix, exact);
-    
-    if(m.Groups["imag"].Success) // if it has an imaginary part (meaning that it's a complex number)
+    else if(ParseNumber(m.Groups["num"].Value, m.Groups["exp"].Value, m.Groups["den"].Value, radix, exact,
+                        out token.Value))
     {
-      if(exact == 'e')
+      if(m.Groups["imag"].Success) // if it has an imaginary part (meaning that it's a complex number)
       {
-        throw new NotImplementedException("exact complexes");
+        object real = token.Value, imaginary;
+        if(!ParseNumber(m.Groups["imag"].Value, m.Groups["imagexp"].Value, m.Groups["imagden"].Value, radix, exact,
+                        out imaginary))
+        {
+          token.Value = imaginary;
+          return;
+        }
+
+        bool valueIsExact = !(real is double) && !(imaginary is double);
+        if(exact == 'e' || valueIsExact)
+        {
+          token.Value = new ComplexRational(MakeRational(real), MakeRational(imaginary));
+        }
+        else
+        {
+          token.Value = new Complex(real is double ? (double)real : Convert.ToDouble(real),
+                                    imaginary is double ? (double)imaginary : Convert.ToDouble(imaginary));
+        }
       }
-      else
+      else if(m.Groups["angle"].Success) // if it has an angular part (meaning that it's a polar number)
       {
-        token.Value = new Complex(Convert.ToDouble(numerator),
-                                  Convert.ToDouble(ParseNumber(m.Groups["imag"].Value, m.Groups["imagexp"].Value,
-                                                               radix, exact)));
+        throw new NotImplementedException("Polar numbers");
       }
     }
-    else if(char.ToLowerInvariant(numString[numString.Length-1]) == 'i') // the regex doesn't think it has an imaginary
-    {                                                                    // part, but it actually does...
-      token.Value = new Complex(0, Convert.ToDouble(numerator));
-    }
-    else
+  }
+
+  bool ParseNumber(string str, string exp, string den, int radix, char exact, out object value)
+  {
+    if(!string.IsNullOrEmpty(den)) // if the number is a rational
     {
-      token.Value = numerator;
+      Integer numerator = Integer.Parse(str, radix), denominator = Integer.Parse(den, radix);
+
+      if(denominator == Integer.Zero)
+      {
+        AddMessage(NetLispDiagnostics.DivisionByZero, str+"/"+den);
+        value = double.NaN;
+        return false;
+      }
+
+      value = exact == 'i' ? (object)(Integer.ToDouble(numerator) / Integer.ToDouble(denominator))
+                        : new Rational(numerator, denominator);
     }
+    else if(!string.IsNullOrEmpty(str)) // the number is an explicit real
+    {
+      value = ParseReal(str, exp, radix, exact);
+    }
+    else // the number is not specified
+    {
+      value = 0;
+    }
+
+    return true;
   }
 
   static bool IsDelimiter(char c)
@@ -501,79 +600,76 @@ public class Scanner : ScannerBase<NetLispCompilerState>
 
     switch(c)
     {
-      case '(': case ')': case '[': case ']': case '{': case '}': case '#': case '`': case ',': case '\'': case'\0':
+      case '(': case ')': case '[': case ']': case '{': case '}': case '"': case '`': case '\'': case ',': case '\0':
         return true;
       default:
         return false;
     }
   }
-  
-  static object ParseInteger(string str, int radix)
+
+  static bool IsEOL(char c)
   {
-    if(string.IsNullOrEmpty(str)) return 0;
+    return c == '\n' || c == '\x85' || c == '\x2028';
+  }
 
-    bool negative = str[0] == '-';
-    if(negative) str = str.Substring(1); // the .NET number parser doesn't accept negative numbers with non-10 bases
+  static bool IsHexDigit(char c)
+  {
+    if(c >= '0' && c <= '9') return true;
+    c = char.ToLowerInvariant(c);
+    return c >= 'a' && c <= 'f';
+  }
 
-    try
+  static int GetHexValue(char c)
+  {
+    return c >= '0' && c <= '9' ? c-'0' : char.ToLowerInvariant(c)-'a'+10;
+  }
+
+  static Rational MakeRational(object o)
+  {
+    if(o is int) return new Rational((int)o);
+    else if(o is long) return new Rational((long)o);
+    else return (Rational)o;
+  }
+
+  static double ParseDouble(string str, int radix)
+  {
+    return radix == 10 ? double.Parse(str, CultureInfo.InvariantCulture) : ParseNumberAsRational(str, radix).ToDouble();
+  }
+
+  static object ParseReal(string str, string exp, int radix, char exact)
+  {
+    if(str.IndexOf('.') == -1 && string.IsNullOrEmpty(exp) && exact != 'i') // if the number is an exact integer
     {
-      int i = Convert.ToInt32(str, radix);
-      return negative ? -i : i;
+      return ShrinkInteger(Integer.Parse(str, radix));
     }
-    catch(OverflowException)
+    else if(exact == 'e') // otherwise, the number is exact, probably a rational
     {
-      try
+      Rational number = ParseNumberAsRational(str, radix);
+      if(!string.IsNullOrEmpty(exp))
       {
-        long L = Convert.ToInt64(str, radix);
-        return negative ? -L : L;
+        Integer factor = Integer.Pow(10, Integer.Abs(Integer.Parse(exp, radix)));
+        if(exp[0] == '-') number /= factor;
+        else number *= factor;
+
+        // if after the exponentation, the number became an integer, return the integer
+        if(number.Denominator == Integer.One) return ShrinkInteger(number.Numerator);
       }
-      catch(OverflowException)
-      {
-        Integer I = Integer.Parse(str, radix);
-        return negative ? -I : I;
-      }
+      return number;
+    }
+    else // the number is inexact (a double)
+    {
+      double number = ParseDouble(str, radix);
+      if(!string.IsNullOrEmpty(exp)) number *= Math.Pow(10, ParseDouble(exp, radix));
+      return number;
     }
   }
-  
-  static Rational ParseNumber(string str, int radix)
+
+  static Rational ParseNumberAsRational(string str, int radix)
   {
     int period = str.IndexOf('.');
     if(period == -1) return new Rational(Integer.Parse(str, radix));
     string whole = str.Substring(0, period), frac = str.Substring(period+1);
-    return new Rational(Integer.Parse(whole+frac, radix), Integer.Pow(new Integer(10), new Integer(frac.Length)));
-  }
-  
-  static object ParseNumber(string str, string exp, int radix, char exact)
-  {
-    if(str.IndexOf('.') == -1 && exp.IndexOf('.') == -1 && exact != 'i') // if the number has no fractional part and
-    {                                                                    // this isn't an inexact number, read it as an
-      Integer i = Integer.Parse(str, radix);                             // integer
-      if(!string.IsNullOrEmpty(exp)) i *= Integer.Pow(new Integer(10), Integer.Parse(exp, radix));
-      return ShrinkInteger(i);
-    }
-    else // otherwise, read it as a floating point
-    {
-      Rational number = ParseNumber(str, radix); // TODO: use rational instead of double for the highest accuracy
-      if(!string.IsNullOrEmpty(exp))
-      {
-        Rational exponent = ParseNumber(exp, radix);
-        if(exponent.Denominator != 1) throw new NotImplementedException("rational powers");
-        number *= Integer.Pow(new Integer(10), exponent.Numerator);
-      }
-
-      if(exact != 'e') // if they want an inexact number, convert it to floating point
-      {
-        return number.ToDouble();
-      }
-      else if(number.Numerator == 1) // otherwise, if the number seems to be an integer, convert it to one
-      {
-        return ShrinkInteger(number.Numerator);
-      }
-      else // otherwise, just return the rational
-      {
-        return number;
-      }
-    }
+    return new Rational(Integer.Parse(whole+frac, radix), Integer.Pow(10, new Integer(frac.Length)));
   }
 
   static object ShrinkInteger(Integer i)
@@ -583,53 +679,37 @@ public class Scanner : ScannerBase<NetLispCompilerState>
     else return i;
   }
 
-  static readonly Regex binNum =
-    new Regex(@"^(
-                   (?<num>[+-]?([01]+(\.[01]*)?|\.[01]+))
-                   (e(?<exp>[+-]?([01]+(\.[01]*)?|\.[01]+)))?
-                   (((?<imag>[+-]([01]+(\.[01]*)?|\.[01]+))
-                     (e(?<imagexp>[+-]?([01]+(\.[01]*)?|\.[01]+)))?
-                   )?i)?
-                 |
-                 (?<num>[+-]?[01]+)/(?<den>[+-]?[01]+)
-                )$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace |
-                     RegexOptions.Singleline | RegexOptions.ExplicitCapture);
+  static Regex MakeNumberRegex(string digitType)
+  {
+    return MakeNumberRegex(digitType, "ef");
+  }
 
-  static readonly Regex octNum =
-    new Regex(@"^(
-                   (?<num>[+-]?([0-7]+(\.[0-7]*)?|\.[0-7]+))
-                   (e(?<exp>[+-]?([0-7]+(\.[0-7]*)?|\.[0-7]+)))?
-                   (((?<imag>[+-]([0-7]+(\.[0-7]*)?|\.[0-7]+))
-                     (e(?<imagexp>[+-]?([0-7]+(\.[0-7]*)?|\.[0-7]+)))?
-                   )?i)?
-                 |
-                 (?<num>[+-]?[0-7]+)/(?<den>[+-]?[0-7]+)
-                )$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace |
-                     RegexOptions.Singleline | RegexOptions.ExplicitCapture);
+  static Regex MakeNumberRegex(string digitType, string extraExpChars)
+  {
+    string unsignedInt  = digitType + "+", signedInt = "[+-]?" + unsignedInt;
+    string unsignedReal = "(" + unsignedInt + @"(\." + digitType + @"*)?|\." + unsignedInt + ")";
+    string signedReal   = "[+-]?" + unsignedReal;
+    string e = "[dls" + extraExpChars + "]";
 
-  static readonly Regex decNum =
-    new Regex(@"^(
-                   (?<num>[+-]?(\d+(\.\d*)?|\.\d+))
-                   (e(?<exp>[+-]?(\d+(\.\d*)?|\.\d+)))?
-                   (((?<imag>[+-](\d+(\.\d*)?|\.\d+))
-                     (e(?<imagexp>[+-]?(\d+(\.\d*)?|\.\d+)))?
-                   )?i)?
-                 |
-                 (?<num>[+-]?\d+)/(?<den>[+-]?\d+)
-                )$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace |
-                     RegexOptions.Singleline | RegexOptions.ExplicitCapture);
+    return
+      new Regex(@"^(((?<num>" + signedReal + ") ("+e+"(?<exp>" + signedInt + @"))? |
+                     (?<num>" + signedInt + ") / (?<den>" + unsignedInt + @"))
+                    ((@ ((?<angle>" + signedReal + ") ("+e+"(?<angleexp>" + signedInt + @"))? |
+                         (?<angle>" + signedInt + ") / (?<angleden>" + unsignedInt + @"))) |
+                     (((?<imag>[+-]" + unsignedReal + ") ("+e+"(?<imagexp>" + signedInt + @"))? |
+                       (?<imag>[+-]" + unsignedInt + ") / (?<imagden>" + unsignedInt + @")) i)
+                    )? |
+                    ((?<imag>[+-]" + unsignedReal + ") ("+e+"(?<imagexp>" + signedInt + @"))? |
+                     (?<imag>[+-]" + unsignedInt + ") / (?<imagden>" + unsignedInt + @")) i |
+                    (?<special>[+-](inf|nan))\.0
+                  )$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace |
+                       RegexOptions.Singleline | RegexOptions.ExplicitCapture);
+  }
 
-  static readonly Regex hexNum =
-    new Regex(@"^(
-                   (?<num>[+-]?([\da-f]+(\.[\da-f]*)?|\.[\da-f]+))
-                   (e(?<exp>[+-]?([\da-f]+(\.[\da-f]*)?|\.[\da-f]+)))?
-                   (((?<imag>[+-]([\da-f]+(\.[\da-f]*)?|\.[\da-f]+))
-                     (e(?<imagexp>[+-]?([\da-f]+(\.[\da-f]*)?|\.[\da-f]+)))?
-                   )?i)?
-                 |
-                 (?<num>[+-]?[\da-f]+)/(?<den>[+-]?[\da-f]+)
-                )$", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace |
-                     RegexOptions.Singleline | RegexOptions.ExplicitCapture);
+  static readonly Regex binNumRe = MakeNumberRegex("[01]");
+  static readonly Regex octNumRe = MakeNumberRegex("[0-7]");
+  static readonly Regex decNumRe = MakeNumberRegex("[0-9]");
+  static readonly Regex hexNumRe = MakeNumberRegex("[0-9a-f]", null);
 }
 
 } // namespace NetLisp.Backend

@@ -94,9 +94,22 @@ public static class Ops
   }
   #endregion
   
-  public static Binding CheckBinding(Binding binding)
+  public static Binding CheckBindingForGet(Binding binding)
   {
     if(binding.Value == Binding.Unbound) throw new UndefinedVariableException(binding.Name);
+    return binding;
+  }
+
+  public static Binding CheckBindingForInit(Binding binding)
+  {
+    if(binding.ReadOnly) throw new ReadOnlyVariableException(binding.Name);
+    return binding;
+  }
+
+  public static Binding CheckBindingForSet(Binding binding)
+  {
+    if(binding.Value == Binding.Unbound) throw new UndefinedVariableException(binding.Name);
+    if(binding.ReadOnly) throw new ReadOnlyVariableException(binding.Name);
     return binding;
   }
 

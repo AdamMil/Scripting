@@ -144,10 +144,14 @@ public sealed class NetLispLanguage : Language
 public static class NetLispDiagnostics
 {
   // scanner
-  public static readonly Diagnostic InvalidControlCode    = Error(501, "Invalid control code '{0}'");
+  public static readonly Diagnostic DivisionByZero        = Error(501, "Invalid number '{0}' due to division by zero");
   public static readonly Diagnostic UnknownCharacterName  = Error(502, "Invalid character name '{0}'");
   public static readonly Diagnostic EncounteredUnreadable = Error(503, "Unable to read: #<...");
   public static readonly Diagnostic UnknownNotation       = Error(504, "Unknown notation #{0}");
+  public static readonly Diagnostic InvalidHexCharacter   = Error(505, "The hex string '{0}' is not a valid hex value from 0 to 10FFFF, excluding D800-DFFF.");
+  public static readonly Diagnostic InvalidHexEscape      = Error(506, "The hex string '{0}' is not a valid semicolon-terminated hex value from 0 to 10FFFF, excluding D800-DFFF.");
+  public static readonly Diagnostic MultipleRadixFlags    = Error(507, "The number {0} contained multiple radix flags.");
+  public static readonly Diagnostic MultipleExactnessFlags = Error(508, "The number {0} contained multiple exactness flags.");
   // parser
   public static readonly Diagnostic OptionExpects         = Error(551, "Option '{0}' expects {1} value");
   public static readonly Diagnostic UnknownOption         = Error(552, "Unknown option '{0}'");

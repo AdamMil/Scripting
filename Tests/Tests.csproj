@@ -47,6 +47,14 @@
     <Reference Include="System" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\AdamMil.net\TestHelpers\AdamMil.TestHelpers.csproj">
+      <Project>{E755006A-EB9E-4A5A-9872-65A2C4737C20}</Project>
+      <Name>AdamMil.TestHelpers</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\NetLisp\NetLisp.csproj">
+      <Project>{FF024EBA-BA3F-420E-BF26-DB3FC5207A64}</Project>
+      <Name>NetLisp</Name>
+    </ProjectReference>
     <ProjectReference Include="..\Scripting.csproj">
       <Project>{F813554C-A437-4B39-AA54-058A9C55A644}</Project>
       <Name>Scripting</Name>
@@ -54,7 +62,9 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Complex.cs" />
+    <Compile Include="ComplexRational.cs" />
     <Compile Include="Integer.cs" />
+    <Compile Include="NetLisp.cs" />
     <Compile Include="Rational.cs" />
   </ItemGroup>
 </Project>

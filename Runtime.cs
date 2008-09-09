@@ -52,11 +52,15 @@ public sealed class Binding
   public object Value;
   public readonly string Name;
   public readonly BindingContainer From;
+  public bool ReadOnly;
 
   public readonly static object Unbound = new Singleton("<UNBOUND>");
 }
 #endregion
 
+// TODO: rethink this bindingcontainer stuff... we may want to have different semantics for different languages, such
+// that in one language, imported bindings are immutable, but in another language they are not. also, this stuff
+// doesn't seem to be used much at the moment. TopLevelSlot does its own thing. etc.
 #region BindingContainer
 public abstract class BindingContainer
 {
@@ -80,7 +84,8 @@ public sealed class BindingDictionary
         Dict[name] = bind = new Binding(name, from);
       }
     }
-    bind.Value = value;
+    
+    Ops.CheckBindingForInit(bind).Value = value;
   }
 
   /// <summary>Determines whether the given variable is bound within this dictionary and has a defined value (not equal
@@ -103,12 +108,9 @@ public sealed class BindingDictionary
     Binding bind;
     lock(Dict)
     {
-      if(!Dict.TryGetValue(name, out bind) || bind.Value == Binding.Unbound)
-      {
-        throw new UndefinedVariableException(name);
-      }
+      if(!Dict.TryGetValue(name, out bind)) throw new UndefinedVariableException(name);
     }
-    return bind.Value;
+    return Ops.CheckBindingForGet(bind).Value;
   }
 
   /// <summary>Gets the binding for a variable. If the binding does not exist, it will be created.</summary>
@@ -133,7 +135,7 @@ public sealed class BindingDictionary
     {
       if(!Dict.TryGetValue(name, out bind)) throw new UndefinedVariableException(name);
     }
-    bind.Value = value;
+    Ops.CheckBindingForSet(bind).Value = value;
   }
 
   public bool TryGet(string name, out object value)
@@ -151,9 +153,17 @@ public sealed class BindingDictionary
     return true;
   }
 
-  public void Unbind(string name)
+  public void Unbind(string name, BindingContainer from)
   {
-    lock(Dict) Dict.Remove(name);
+    lock(Dict)
+    {
+      Binding bind;
+      if(Dict.TryGetValue(name, out bind))
+      {
+        if(bind.ReadOnly && bind.From != from) throw new ReadOnlyVariableException(name);
+        else Dict.Remove(name);
+      }
+    }
   }
 
   public readonly Dictionary<string,Binding> Dict = new Dictionary<string,Binding>();
@@ -542,7 +552,7 @@ public sealed class TopLevel : BindingContainer
 
   public void Unbind(string name)
   {
-    Globals.Unbind(name);
+    Globals.Unbind(name, this);
   }
 
   public bool TryGet(string name, out object value)

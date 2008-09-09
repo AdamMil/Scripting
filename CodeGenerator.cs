@@ -18,42 +18,47 @@ public static class CG
   static CG()
   {
     // build a table of allowable implicit numeric conversions. all integer types are convertible to floating point,
-    // decimal, and Integer. all signed integer types are convertible to larger signed integer types. all unsigned
-    // integer types are convertible to larger integer types.
+    // decimal, Integer, Rational, Complex, and ComplexRational. all signed integer types are convertible to larger
+    // signed integer types. all unsigned integer types are convertible to larger integer types.
     numericConversions = new SortedList<ITypeInfo,ITypeInfo[]>(10, TypeComparer.Instance);
     numericConversions[TypeWrapper.SByte] = new ITypeInfo[]
       { TypeWrapper.Short, TypeWrapper.Int, TypeWrapper.Long, TypeWrapper.Integer, TypeWrapper.Double,
-        TypeWrapper.Single, TypeWrapper.Decimal, TypeWrapper.Complex, TypeWrapper.Rational,
+        TypeWrapper.Single, TypeWrapper.Decimal, TypeWrapper.Complex, TypeWrapper.Rational, TypeWrapper.ComplexRational
       };
     numericConversions[TypeWrapper.Byte] = new ITypeInfo[]
       { TypeWrapper.Short, TypeWrapper.UShort, TypeWrapper.Int, TypeWrapper.UInt, TypeWrapper.Long, TypeWrapper.ULong,
         TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal, TypeWrapper.Complex,
-        TypeWrapper.Rational,
+        TypeWrapper.Rational, TypeWrapper.ComplexRational
       };
     numericConversions[TypeWrapper.Short] = new ITypeInfo[]
       { TypeWrapper.Int, TypeWrapper.Long, TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single,
-        TypeWrapper.Decimal, TypeWrapper.Complex, TypeWrapper.Rational,
+        TypeWrapper.Decimal, TypeWrapper.Complex, TypeWrapper.Rational, TypeWrapper.ComplexRational
       };
     numericConversions[TypeWrapper.UShort] = new ITypeInfo[]
       { TypeWrapper.Int, TypeWrapper.UInt, TypeWrapper.Long, TypeWrapper.ULong, TypeWrapper.Integer,
         TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal, TypeWrapper.Complex, TypeWrapper.Rational,
+        TypeWrapper.ComplexRational
       };
     numericConversions[TypeWrapper.Int] = new ITypeInfo[]
       { TypeWrapper.Long, TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single, TypeWrapper.Decimal,
-        TypeWrapper.Complex, TypeWrapper.Rational,
+        TypeWrapper.Complex, TypeWrapper.Rational, TypeWrapper.ComplexRational
       };
     numericConversions[TypeWrapper.UInt] = new ITypeInfo[]
       { TypeWrapper.Long, TypeWrapper.ULong, TypeWrapper.Integer, TypeWrapper.Double, TypeWrapper.Single,
-        TypeWrapper.Decimal, TypeWrapper.Complex, TypeWrapper.Rational,
+        TypeWrapper.Decimal, TypeWrapper.Complex, TypeWrapper.Rational, TypeWrapper.ComplexRational
       };
     numericConversions[TypeWrapper.Long] = new ITypeInfo[]
       { TypeWrapper.Integer, TypeWrapper.Complex, TypeWrapper.Rational, TypeWrapper.Double, TypeWrapper.Single,
-        TypeWrapper.Decimal
+        TypeWrapper.Decimal, TypeWrapper.ComplexRational
       };
     numericConversions[TypeWrapper.ULong] = numericConversions[TypeWrapper.Long];
     numericConversions[TypeWrapper.Char] = numericConversions[TypeWrapper.UShort];
     numericConversions[TypeWrapper.Single] =
-      new ITypeInfo[] { TypeWrapper.Double, TypeWrapper.Complex, TypeWrapper.Rational };
+      new ITypeInfo[] { TypeWrapper.Double, TypeWrapper.Complex, TypeWrapper.Rational, TypeWrapper.ComplexRational };
+    numericConversions[TypeWrapper.Double] =
+      new ITypeInfo[] { TypeWrapper.Complex, TypeWrapper.Rational, TypeWrapper.ComplexRational };
+    numericConversions[TypeWrapper.Integer] = new ITypeInfo[] { TypeWrapper.Rational, TypeWrapper.ComplexRational };
+    numericConversions[TypeWrapper.Rational] = new ITypeInfo[] { TypeWrapper.ComplexRational };
   }
 
   public static ITypeInfo GetCommonBaseType(ASTNode a, ASTNode b)
@@ -307,7 +312,7 @@ public static class CG
   public static bool IsNumeric(Type type)
   {
     return IsPrimitiveNumeric(type) || type == typeof(decimal) || type == typeof(Integer) || type == typeof(Complex) ||
-      type == typeof(Rational);
+      type == typeof(Rational) || type == typeof(ComplexRational);
   }
 
   public static bool IsPrimitiveNumeric(Type type)
@@ -555,8 +560,7 @@ public class CodeGenerator
   /// <remarks>If you override this method, you should also override <see cref="EmitConstant"/>.</remarks>
   public virtual bool CanEmitConstant(Type type)
   {
-    return Type.GetTypeCode(type) != TypeCode.Object ||
-           type == typeof(Complex) || type == typeof(Integer) || typeof(Type).IsAssignableFrom(type) ||
+    return Type.GetTypeCode(type) != TypeCode.Object || CG.IsNumeric(type) || typeof(Type).IsAssignableFrom(type) ||
            type.IsArray && CanEmitConstant(type.GetElementType());
   }
 
@@ -908,7 +912,11 @@ public class CodeGenerator
 
         case TypeCode.Object:
         default:
-          if(value is Complex)
+          if(value is Type)
+          {
+            EmitType((Type)value);
+          }
+          else if(value is Complex)
           {
             Complex c = (Complex)value;
             ILG.Emit(OpCodes.Ldc_R8, c.Real);
@@ -959,9 +967,19 @@ public class CodeGenerator
             EmitConstant(r.Denominator);
             EmitCall(typeof(Rational), "Recreate");
           }
-          else if(value is Type)
+          else if(value is ComplexRational)
           {
-            EmitType((Type)value);
+            ComplexRational c = (ComplexRational)value;
+            EmitConstant(c.Real);
+            if(c.Imaginary == Rational.Zero)
+            {
+              EmitNew(typeof(ComplexRational), typeof(Rational));
+            }
+            else
+            {
+              EmitConstant(c.Imaginary);
+              EmitNew(typeof(ComplexRational), typeof(Rational), typeof(Rational));
+            }
           }
           else
           {
@@ -1915,19 +1933,39 @@ public class CodeGenerator
       return true;
     }
 
-    // see about conversion from primitive numerics to Decimal, Complex, Integer, and Rational
-    if(CG.IsPrimitiveNumeric(typeOnStack) && CG.IsNumeric(destType))
+    // see about conversion from primitive numerics to Decimal, Integer, Rational, Complex, and ComplexRational.
+    // the conversion is valid from all integer types to all non-primitive numerics, but for floating point types,
+    // we'll check the destination type with HasImplicitConversion()
+    if(CG.IsPrimitiveNumeric(typeOnStack) && CG.IsNumeric(destType) &&
+       (!CG.IsFloatingPoint(typeOnStack.TypeCode) || CG.HasImplicitConversion(typeOnStack, destType)))
     {
-      // all non-primitive numerics recognized by CG.IsNumeric have constructors that take double, int, uint, long, and
-      // ulong, and Decimal also accepts float
-      if(typeOnStack == TypeWrapper.Single && destType != TypeWrapper.Decimal) // convert float to double for
-      {                                                                        // non-Decimal numeric types
-        ILG.Emit(OpCodes.Conv_R8);
-        typeOnStack = TypeWrapper.Double;
-      }
-      else if(CG.SizeOfPrimitiveNumeric(typeOnStack) < 4) // make small integer values into int or uint
+      if(CG.SizeOfPrimitiveNumeric(typeOnStack) < 4) // make small integer values into int or uint
       {
         typeOnStack = CG.IsSigned(typeOnStack) ? TypeWrapper.Int : TypeWrapper.UInt;
+      }
+
+      // all non-primitive numerics recognized by CG.IsNumeric (except Complex and ComplexRational) have constructors
+      // that take double, int, uint, long, and ulong, and Decimal also accepts float
+      if(destType == TypeWrapper.Complex) // Complex only accepts double in its constructor, but also has implicit
+      {                                   // conversions for float, int, and uint
+        if(typeOnStack != TypeWrapper.Double)
+        {
+          EmitCall(destType.GetMethod("op_Implicit", BindingFlags.Public|BindingFlags.Static, typeOnStack));
+          return true;
+        }
+      }
+      else if(destType == TypeWrapper.ComplexRational) // ComplexRational only accepts Rational in its constructor,
+      {                                                // but has implicit conversions for float, double, int, uint, 
+        if(typeOnStack != TypeWrapper.Rational)        // long, and ulong
+        {
+          EmitCall(destType.GetMethod("op_Implicit", BindingFlags.Public|BindingFlags.Static, typeOnStack));
+          return true;
+        }
+      }
+      else if(typeOnStack == TypeWrapper.Single && destType != TypeWrapper.Decimal) // convert float to double for
+      {                                                                             // non-Decimal numeric types
+        ILG.Emit(OpCodes.Conv_R8);
+        typeOnStack = TypeWrapper.Double;
       }
       EmitNew(destType, typeOnStack);
       return true;

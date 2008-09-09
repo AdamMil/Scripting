@@ -3,6 +3,7 @@ using System;
 namespace Scripting.Runtime
 {
 
+#region Complex
 public struct Complex
 {
   public Complex(double real)
@@ -238,9 +239,170 @@ public struct Complex
   public static bool operator!=(Complex a, double b) { return a.Real != b || a.Imaginary != 0; }
   public static bool operator!=(double a, Complex b) { return a != b.Real || b.Imaginary != 0; }
 
+  public static implicit operator Complex(float real) { return new Complex(real, 0); }
+  public static implicit operator Complex(double real) { return new Complex(real, 0); }
+  public static implicit operator Complex(int real) { return new Complex(real, 0); }
+  public static implicit operator Complex(uint real) { return new Complex(real, 0); }
+
   public static readonly Complex Zero = new Complex(0);
   public static readonly Complex  One = new Complex(1, 0);
   public static readonly Complex    I = new Complex(0, 1);
 }
+#endregion
+
+#region ComplexRational
+public sealed class ComplexRational
+{
+  public ComplexRational(Rational real)
+  {
+    Real      = real;
+    Imaginary = Rational.Zero;
+  }
+
+  public ComplexRational(Rational real, Rational imag)
+  {
+    Real      = real;
+    Imaginary = imag;
+  }
+
+  public double Angle
+  {
+    get { return Math.Atan2(Imaginary.ToDouble(), Real.ToDouble()); }
+  }
+
+  public ComplexRational Conjugate
+  {
+    get { return new ComplexRational(Real, -Imaginary); }
+  }
+
+  public double Magnitude
+  {
+    get
+    {
+      double real = Real.ToDouble(), imaginary = Imaginary.ToDouble();
+      return Math.Sqrt(real*real + imaginary*imaginary);
+    }
+  }
+
+  public ComplexRational Inverse
+  {
+    get { return new ComplexRational(-Imaginary, Real); }
+  }
+
+  public override bool Equals(object obj)
+  {
+    if(!(obj is ComplexRational)) return false;
+    ComplexRational other = (ComplexRational)obj;
+    return other.Real == Real && other.Imaginary == Imaginary;
+  }
+
+  public override int GetHashCode()
+  {
+    return Real.GetHashCode() ^ Imaginary.GetHashCode();
+  }
+
+  public override string ToString()
+  {
+    System.Text.StringBuilder sb = new System.Text.StringBuilder();
+    sb.Append(Real);
+    if(Imaginary >= 0) sb.Append('+');
+    sb.Append(Imaginary);
+    sb.Append('i');
+    return sb.ToString();
+  }
+
+  public Rational Real, Imaginary;
+
+  public static ComplexRational operator+(ComplexRational a, ComplexRational b) 
+  {
+    return new ComplexRational(a.Real+b.Real, a.Imaginary+b.Imaginary); 
+  }
+  public static ComplexRational operator+(ComplexRational a, double b) 
+  {
+    return new ComplexRational(a.Real+b, a.Imaginary); 
+  }
+  public static ComplexRational operator+(double a, ComplexRational b) 
+  {
+    return new ComplexRational(a+b.Real, b.Imaginary); 
+  }
+
+  public static ComplexRational operator-(ComplexRational a, ComplexRational b)
+  {
+    return new ComplexRational(a.Real-b.Real, a.Imaginary-b.Imaginary); 
+  }
+  public static ComplexRational operator-(ComplexRational a, double b) 
+  {
+    return new ComplexRational(a.Real-b, a.Imaginary); 
+  }
+  public static ComplexRational operator-(double a, ComplexRational b) 
+  {
+    return new ComplexRational(a-b.Real, -b.Imaginary); 
+  }
+
+  public static ComplexRational operator*(ComplexRational a, ComplexRational b)
+  {
+    return new ComplexRational(a.Real*b.Real - a.Imaginary*b.Imaginary, a.Real*b.Imaginary + a.Imaginary*b.Real);
+  }
+  public static ComplexRational operator*(ComplexRational a, double b)
+  { 
+    return new ComplexRational(a.Real*b, a.Imaginary*b); 
+  }
+  public static ComplexRational operator*(double a, ComplexRational b) 
+  { 
+    return new ComplexRational(a*b.Real, a*b.Imaginary); 
+  }
+
+  public static ComplexRational operator/(ComplexRational a, ComplexRational b)
+  {
+    Rational abs_breal = Rational.Abs(b.Real), abs_bimag = Rational.Abs(b.Imaginary);
+    Rational real, imag;
+
+    if(abs_breal >= abs_bimag)
+    {
+      if(abs_breal == Rational.Zero) throw new DivideByZeroException("attempted ComplexRational division by zero");
+
+      Rational ratio = b.Imaginary / b.Real;
+      Rational denom = b.Real + b.Imaginary * ratio;
+      real = (a.Real + a.Imaginary * ratio) / denom;
+      imag = (a.Imaginary - a.Real * ratio) / denom;
+    }
+    else
+    {
+      Rational ratio = b.Real / b.Imaginary;
+      Rational denom = b.Real * ratio + b.Imaginary;
+      real = (a.Real * ratio + a.Imaginary) / denom;
+      imag = (a.Imaginary * ratio - a.Real) / denom;
+    }
+
+    return new ComplexRational(real, imag);
+  }
+
+  public static ComplexRational operator/(ComplexRational a, Rational b) { return new ComplexRational(a.Real/b, a.Imaginary/b); }
+  public static ComplexRational operator/(Rational a, ComplexRational b) { return new ComplexRational(a) / b; }
+
+  public static ComplexRational operator-(ComplexRational a) { return new ComplexRational(-a.Real, -a.Imaginary); }
+
+  public static bool operator==(ComplexRational a, ComplexRational b) { return a.Real == b.Real && a.Imaginary == b.Imaginary; }
+  public static bool operator==(ComplexRational a, Rational b) { return a.Real == b && a.Imaginary == 0; }
+  public static bool operator==(Rational a, ComplexRational b) { return a == b.Real && b.Imaginary == 0; }
+
+  public static bool operator!=(ComplexRational a, ComplexRational b) { return a.Real != b.Real || a.Imaginary != b.Imaginary; }
+  public static bool operator!=(ComplexRational a, Rational b) { return a.Real != b || a.Imaginary != 0; }
+  public static bool operator!=(Rational a, ComplexRational b) { return a != b.Real || b.Imaginary != 0; }
+
+  public static implicit operator ComplexRational(float real) { return new ComplexRational(real, 0); }
+  public static implicit operator ComplexRational(double real) { return new ComplexRational(real, 0); }
+  public static implicit operator ComplexRational(Rational real) { return new ComplexRational(real, 0); }
+  public static implicit operator ComplexRational(int real) { return new ComplexRational(real, 0); }
+  public static implicit operator ComplexRational(uint real) { return new ComplexRational(real, 0); }
+  public static implicit operator ComplexRational(long real) { return new ComplexRational(real, 0); }
+  public static implicit operator ComplexRational(ulong real) { return new ComplexRational(real, 0); }
+  public static implicit operator ComplexRational(Integer real) { return new ComplexRational(real, 0); }
+
+  public static readonly ComplexRational Zero = new ComplexRational(0);
+  public static readonly ComplexRational One  = new ComplexRational(1, 0);
+  public static readonly ComplexRational I    = new ComplexRational(0, 1);
+}
+#endregion
 
 } // namespace Scripting.Runtime

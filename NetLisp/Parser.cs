@@ -11,7 +11,8 @@ namespace NetLisp.AST
 
 enum TokenType
 {
-  Literal, Symbol, Vector, LParen, RParen, LBracket, RBracket, LCurly, RCurly, Quote, BackQuote, Period, EOF
+  Literal, Symbol, Vector, LParen, RParen, LBracket, RBracket, LCurly, RCurly, Quote, BackQuote, Period, DatumComment,
+  EOF
 }
 
 public class Parser : ParserBase<NetLispCompilerState>
@@ -185,6 +186,12 @@ public class Parser : ParserBase<NetLispCompilerState>
         Consume(TokenType.RParen);
         break;
 
+      case TokenType.DatumComment:
+        NextToken();
+        ParseOne();
+        ret = ParseOne();
+        break;
+
       case TokenType.EOF:
         Unexpected(tokenType);
         break;
@@ -204,7 +211,9 @@ public class Parser : ParserBase<NetLispCompilerState>
     BlockNode body = new BlockNode();
     while(!TokenIs(TokenType.EOF))
     {
-      body.Children.Add(ParseOne());
+      bool ignore = TryConsume(TokenType.DatumComment);
+      ASTNode node = ParseOne();
+      if(!ignore) body.Children.Add(node);
     }
     return body;
   }

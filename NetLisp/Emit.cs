@@ -58,7 +58,7 @@ public sealed class StaticTopLevelSlot : ProxySlot
 
   protected override Slot CreateSlot(CodeGenerator cg, string name, ITypeInfo type)
   {
-    topSlot = new TopLevelSlot(name);
+    topSlot = new TopLevelSlot(name, true);
     return cg.Assembly.GetPrivateClass().DefineStaticField("top$"+name, type);
   }
 

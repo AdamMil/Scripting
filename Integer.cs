@@ -229,7 +229,6 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
   {
     if(str == null) throw new ArgumentNullException();
     if(radix < 2 || radix > 36) throw new ArgumentOutOfRangeException("radix must be from 2 to 36");
-    string charSet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ".Substring(0, radix);
     
     int i = 0;
     bool negative = false;
@@ -251,16 +250,14 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
 
     while(i<str.Length && char.IsWhiteSpace(str[i])) i++; // skip more whitespace
 
-    if(i == str.Length || charSet.IndexOf(char.ToUpperInvariant(str[i])) == -1)
+    int startIndex = i;
+    Integer value = Zero;
+    for(char c; i != str.Length && IsValidDigit(c=char.ToUpperInvariant(str[i]), radix); i++)
     {
-      throw new FormatException("String does not contain a valid integer");
+      value = value*radix + (c - (c <= '9' ? '0' : 'A'-10));
     }
 
-    Integer value = Zero;
-    do
-    {
-      value = value*radix + (str[i]>'9' ? str[i]-'A'+10 : str[i]-'0');
-    } while(++i != str.Length && charSet.IndexOf(char.ToUpperInvariant(str[i])) != -1);
+    if(i == startIndex) throw new FormatException("String does not contain a valid integer");
 
     return negative ? -value : value;
   }
@@ -419,14 +416,8 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     }
   }
 
-  public static Integer operator+(Integer a, long b) { return a + new Integer(b); }
-  public static Integer operator+(Integer a, ulong b) { return a + new Integer(b); }
   public static Integer operator+(int a, Integer b) { return b + a; }
   public static Integer operator+(uint a, Integer b) { return b + a; }
-  public static Integer operator+(long a, Integer b) { return new Integer(a) + b; }
-  public static Integer operator+(ulong a, Integer b) { return new Integer(a) + b; }
-  public static double operator+(Integer a, double b) { return Integer.ToDouble(a, false) + b; }
-  public static double operator+(double a, Integer b) { return a + Integer.ToDouble(b, false); }
   #endregion
 
   #region Subtraction
@@ -480,9 +471,6 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     }
   }
 
-  public static Integer operator-(Integer a, long b) { return a - new Integer(b); }
-  public static Integer operator-(Integer a, ulong b) { return a - new Integer(b); }
-
   public static Integer operator-(int a, Integer b)
   {
     uint ua = IntToUint(a);
@@ -514,11 +502,6 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
       else return new Integer((short)-b.sign, Subtract(b.data, b.length, a));
     }
   }
-
-  public static Integer operator-(long a, Integer b) { return new Integer(a) - b; }
-  public static Integer operator-(ulong a, Integer b) { return new Integer(a) - b; }
-  public static double operator-(Integer a, double b) { return Integer.ToDouble(a, false) - b; }
-  public static double operator-(double a, Integer b) { return a - Integer.ToDouble(b, false); }
   #endregion
 
   #region Multiplication
@@ -539,9 +522,6 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     return b == 0 || a.sign == 0 ? Zero : new Integer(a.sign, Multiply(a.data, a.length, b));
   }
 
-  public static Integer operator*(Integer a, long b) { return a * new Integer(b); }
-  public static Integer operator*(Integer a, ulong b) { return a * new Integer(b); }
-
   public static Integer operator*(int a, Integer b)
   {
     int newSign = Math.Sign(a) * b.sign;
@@ -552,11 +532,6 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
   {
     return a == 0 || b.sign == 0 ? Zero : new Integer(b.sign, Multiply(b.data, b.length, a));
   }
-
-  public static Integer operator*(long a, Integer b) { return new Integer(a) * b; }
-  public static Integer operator*(ulong a, Integer b) { return new Integer(a) * b; }
-  public static double operator*(Integer a, double b) { return Integer.ToDouble(a, false) * b; }
-  public static double operator*(double a, Integer b) { return a * Integer.ToDouble(b, false); }
   #endregion
 
   #region Division
@@ -596,15 +571,6 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     uint dummy;
     return new Integer(a.sign, Divide(a.data, a.length, b, out dummy));
   }
-
-  public static Integer operator/(Integer a, long b) { return a / new Integer(b); }
-  public static Integer operator/(Integer a, ulong b) { return a / new Integer(b); }
-  public static Integer operator/(int a, Integer b) { return new Integer(a) / b; }
-  public static Integer operator/(uint a, Integer b) { return new Integer(a) / b; }
-  public static Integer operator/(long a, Integer b) { return new Integer(a) / b; }
-  public static Integer operator/(ulong a, Integer b) { return new Integer(a) / b; }
-  public static double operator/(Integer a, double b) { return Integer.ToDouble(a, false) / b; }
-  public static double operator/(double a, Integer b) { return a / Integer.ToDouble(b, false); }
   #endregion
 
   #region Modulus
@@ -653,13 +619,6 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     ret.sign = a.sign;
     return ret;
   }
-
-  public static Integer operator%(Integer a, long b) { return a % new Integer(b); }
-  public static Integer operator%(Integer a, ulong b) { return a % new Integer(b); }
-  public static Integer operator%(int a, Integer b) { return new Integer(a) % b; }
-  public static Integer operator%(uint a, Integer b) { return new Integer(a) % b; }
-  public static Integer operator%(long a, Integer b) { return new Integer(a) % b; }
-  public static Integer operator%(ulong a, Integer b) { return new Integer(a) % b; }
   #endregion
 
   #region Unary operators
@@ -683,15 +642,6 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     uint[] data = BitAnd(a.data, a.length, aIsNeg, b.data, b.length, bIsNeg);
     return aIsNeg && bIsNeg ? new Integer(-1, TwosComplement(data)) : new Integer(1, data);
   }
-
-  public static Integer operator&(Integer a, int b) { return a & new Integer(b); }
-  public static Integer operator&(Integer a, uint b) { return a & new Integer(b); }
-  public static Integer operator&(Integer a, long b) { return a & new Integer(b); }
-  public static Integer operator&(Integer a, ulong b) { return a & new Integer(b); }
-  public static Integer operator&(int a, Integer b) { return new Integer(a) & b; }
-  public static Integer operator&(uint a, Integer b) { return new Integer(a) & b; }
-  public static Integer operator&(long a, Integer b) { return new Integer(a) & b; }
-  public static Integer operator&(ulong a, Integer b) { return new Integer(a) & b; }
   #endregion
 
   #region Bitwise Or
@@ -701,15 +651,6 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     if(!aIsNeg && !bIsNeg) return new Integer(1, BitOr(a.data, a.length, b.data, b.length));
     return new Integer(-1, TwosComplement(BitOr(a.data, a.length, aIsNeg, b.data, b.length, bIsNeg)));
   }
-
-  public static Integer operator|(Integer a, int b) { return a | new Integer(b); }
-  public static Integer operator|(Integer a, uint b) { return a | new Integer(b); }
-  public static Integer operator|(Integer a, long b) { return a | new Integer(b); }
-  public static Integer operator|(Integer a, ulong b) { return a | new Integer(b); }
-  public static Integer operator|(int a, Integer b) { return new Integer(a) | b; }
-  public static Integer operator|(uint a, Integer b) { return new Integer(a) | b; }
-  public static Integer operator|(long a, Integer b) { return new Integer(a) | b; }
-  public static Integer operator|(ulong a, Integer b) { return new Integer(a) | b; }
   #endregion
 
   #region Bitwise Xor
@@ -776,6 +717,13 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
     return new Integer(a.sign, shift<0 ? LeftShift(a.data, a.length, -shift) : RightShift(a.data, a.length, shift));
   }
   #endregion
+
+  #region Implicit conversion
+  public static implicit operator Integer(int i) { return new Integer(i); }
+  public static implicit operator Integer(uint i) { return new Integer(i); }
+  public static implicit operator Integer(long i) { return new Integer(i); }
+  public static implicit operator Integer(ulong i) { return new Integer(i); }
+  #endregion
   #endregion
 
   #region IConvertible
@@ -813,54 +761,95 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
 
   int IConvertible.ToInt32(IFormatProvider provider)
   {
-    if(length == 0) return 0;
-    if(length > 1 || (sign > 0 && data[0]>(uint)int.MaxValue) || (sign == -1 && data[0]>0x80000000))
+    if(length == 1)
     {
-      throw new OverflowException();
+      uint v = data[0];
+      if(sign == 1)
+      {
+        if(v < 0x80000000) return (int)v;
+      }
+      else
+      {
+        if(v <= 0x80000000) return -(int)v;
+      }
     }
-    return (int)data[0] * sign;
+    else if(length == 0) return 0;
+
+    throw new OverflowException();
   }
 
   ushort IConvertible.ToUInt16(IFormatProvider provider)
   {
-    if(length == 0) return 0;
-    if(length > 1 || data[0] > ushort.MaxValue) throw new OverflowException();
-    return (ushort)data[0];
+    if(length == 1)
+    {
+      if(data[0] <= ushort.MaxValue) return (ushort)data[0];
+    }
+    else if(length == 0) return 0;
+    
+    throw new OverflowException();
   }
 
   short IConvertible.ToInt16(IFormatProvider provider)
   {
-    if(length == 0) return 0;
-    if(length > 1 || (sign > 0 && data[0] > (uint)short.MaxValue) || (sign == -1 && data[0] > (uint)-short.MinValue))
+    if(length == 1)
     {
-      throw new OverflowException();
+      uint v = data[0];
+      if(sign == 1)
+      {
+        if(v < 0x8000) return (short)v;
+      }
+      else
+      {
+        if(v <= 0x8000) return (short)-(int)v;
+      }
     }
-    return (short)((int)data[0]*sign);
+    else if(length == 0) return 0;
+
+    throw new OverflowException();
   }
 
   string IConvertible.ToString(IFormatProvider provider) { return ToString(); }
 
   byte IConvertible.ToByte(IFormatProvider provider)
   {
-    if(length == 0) return 0;
-    if(length > 1 || sign == -1 || (sign > 0 && this > byte.MaxValue)) throw new OverflowException();
-    return (byte)data[0];
+    if(length == 1)
+    {
+      if(sign == 1 && data[0] <= byte.MaxValue) return (byte)data[0];
+    }
+    else if(length == 0) return 0;
+
+    throw new OverflowException();
   }
 
   char IConvertible.ToChar(IFormatProvider provider)
   {
-    if(length == 0) return '\0';
-    if(length > 1 || data[0] > (uint)char.MaxValue) throw new OverflowException();
-    return (char)data[0];
+    if(length == 1)
+    {
+      if(sign == 1 && data[0] <= (uint)char.MaxValue) return (char)data[0];
+    }
+    else if(length == 0) return '\0';
+    
+    throw new OverflowException();
   }
 
   long IConvertible.ToInt64(IFormatProvider provider)
   {
-    if(length == 0) return 0;
-    if(length > 2) throw new OverflowException();
-    if(length == 1) return sign * (int)data[0];
-    if((data[1]&0x80000000) != 0) throw new OverflowException();
-    return (long)((ulong)data[1]<<32 | data[0]);
+    if(length == 2)
+    {
+      uint v = data[1];
+      if(sign == 1)
+      {
+        if(v < 0x80000000) return (long)((ulong)v<<32 | data[0]);
+      }
+      else
+      {
+        if(v < 0x80000000 || v == 0x80000000 && data[0] == 0) return -(long)((ulong)v<<32 | data[0]);
+      }
+    }
+    else if(length == 1) return sign == 1 ? (long)data[0] : -(long)data[0];
+    else if(length == 0) return 0;
+
+    throw new OverflowException();
   }
 
   TypeCode IConvertible.GetTypeCode()
@@ -880,8 +869,9 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
 
   uint IConvertible.ToUInt32(IFormatProvider provider)
   {
-    if(length > 1) throw new OverflowException("Integer won't fit into a uint");
-    return length == 0 ? 0 : data[0];
+    if(length == 1) return data[0];
+    else if(length == 0) return 0;
+    else throw new OverflowException();
   }
 
   internal double ToDouble(bool throwOnInfinity)
@@ -1472,6 +1462,18 @@ public struct Integer : IConvertible, IComparable<Integer>, ICloneable
   static uint GetBitwise(bool negative, uint value, ref bool sourceWasNonZero)
   {
     return negative ? SignExtend(value, ref sourceWasNonZero) : value;
+  }
+
+  static bool IsValidDigit(char c, int radix)
+  {
+    if(c >= '0' && c <= '9')
+    {
+      return c-'0' < radix;
+    }
+    else
+    {
+      return c-'A'+10 < radix;
+    }
   }
 
   static uint IntToUint(int i)
