@@ -240,9 +240,13 @@ public abstract class NumericOperator : NaryOperator
         lhs = TypeWrapper.Unknown;
       }
     }
-    
-    cg.EmitSafeConversion(lhs, desiredType);
-    return desiredType;
+
+    if(desiredType == TypeWrapper.Any) return lhs;
+    else
+    {
+      cg.EmitConversion(lhs, desiredType);
+      return desiredType;
+    }
   }
 
   public override ITypeInfo GetValueType(IList<ASTNode> nodes)
@@ -532,27 +536,15 @@ public sealed class LogicalTruthOperator : UnaryOperator
   {
     ITypeInfo type = node.Emit(cg);
 
-    if(type == null) type = TypeWrapper.Bool; // we consider null to be false, and so does the runtime
-
-    if(type != TypeWrapper.Bool) // if the node didn't give us a nice friendly boolean, we'll have to call Evaluate()
+    // if it's a value type that's not a boolean, then it must be false
+    if(type != TypeWrapper.Bool && type != null && type.IsValueType)
     {
-      cg.EmitSafeConversion(type, TypeWrapper.Object);
-      Slot tmp = cg.AllocLocalTemp(TypeWrapper.Object);
-      tmp.EmitSet(cg);
-      EmitThisOperator(cg);
-      tmp.EmitGet(cg);
-      cg.FreeLocalTemp(tmp);
-      cg.EmitCall(GetType(), "Evaluate", typeof(object));
-      type = TypeWrapper.Object;
-      
-      if(desiredType == TypeWrapper.Bool) // if the desired type is a boolean, we can unbox the object returned by Evaluate
-      {
-        cg.EmitUnsafeConversion(type, desiredType);
-        type = desiredType;
-      }
+      cg.EmitPop();
+      cg.EmitConstant(false);
     }
-
-    return type;
+    // otherwise, it's either a boolean or a reference type, and the runtime uses the same logic for those as us, so
+    // no conversion is necessary
+    return TypeWrapper.Bool;
   }
 
   public override void CheckSemantics(ITypeInfo opContextType, ASTNode node)
@@ -572,7 +564,7 @@ public sealed class LogicalTruthOperator : UnaryOperator
 
   public override ITypeInfo GetValueType(ASTNode node)
   {
-    return TypeWrapper.Bool;
+    return TypeWrapper.Any;
   }
 }
 #endregion
@@ -824,10 +816,10 @@ public sealed class ModulusOperator : NumericOperator
 
     switch(Convert.GetTypeCode(a))
     {
-      case TypeCode.Double: return LowLevel.DoubleRemainder((double)a, (double)b);
+      case TypeCode.Double: return (double)a % (double)b;
       case TypeCode.Int32: return (int)a % (int)b;
       case TypeCode.Int64: return (long)a % (long)b;
-      case TypeCode.Single: return LowLevel.FloatRemainder((float)a, (float)b);
+      case TypeCode.Single: return (float)a % (float)b;
       case TypeCode.UInt32: return (uint)a % (uint)b;
       case TypeCode.UInt64: return (ulong)a % (ulong)b;
     }
@@ -837,9 +829,7 @@ public sealed class ModulusOperator : NumericOperator
 
   protected override void EmitOp(CodeGenerator cg, ITypeInfo typeOnStack, bool signed)
   {
-    if(typeOnStack == TypeWrapper.Double) cg.EmitCall(typeof(LowLevel), "DoubleRemainder");
-    else if(typeOnStack == TypeWrapper.Single) cg.EmitCall(typeof(LowLevel), "FloatRemainder");
-    else cg.ILG.Emit(signed ? OpCodes.Rem : OpCodes.Rem_Un);
+    cg.ILG.Emit(signed ? OpCodes.Rem : OpCodes.Rem_Un);
   }
 }
 #endregion

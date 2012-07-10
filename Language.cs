@@ -47,7 +47,7 @@ public abstract class Language
 
   public abstract ASTDecorator CreateDecorator(DecoratorType type);
 
-  public abstract IParser CreateParser(IScanner scanner);
+  public abstract IASTParser CreateParser(IScanner scanner);
 
   public abstract IScanner CreateScanner(params string[] sourceNames);
   public abstract IScanner CreateScanner(params TextReader[] sources);
@@ -80,7 +80,7 @@ public abstract class Language
 
   ASTNode Parse(IScanner scanner)
   {
-    IParser parser = CreateParser(scanner);
+    IASTParser parser = CreateParser(scanner);
     try
     {
       return parser.ParseProgram();

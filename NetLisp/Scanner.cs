@@ -1,3 +1,24 @@
+/*
+NetLisp is the reference implementation for a language similar to
+Scheme, also called NetLisp. This implementation is both interpreted
+and compiled, targetting the Microsoft .NET Framework.
+
+http://www.adammil.net/
+Copyright (C) 2007-2008 Adam Milazzo
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+*/
+
 using System;
 using System.Globalization;
 using System.IO;
@@ -14,10 +35,11 @@ static class TokenString
 {
   public const string Literal="LITERAL", Symbol="SYMBOL", Vector="VECTOR", LParen="LPAREN", RParen="RPAREN",
                       LBracket="LBRACKET", RBracket="RBRACKET", LCurly="LCURLY", RCurly="RCURLY",
-                      Quote="QUOTE", BackQuote="BACKQUOTE", Period="PERIOD", DatumComment="DATUMCOMMENT";
+                      Quote="QUOTE", BackQuote="BACKQUOTE", Period="PERIOD", Comma="COMMA", Splice="SPLICE",
+                      DatumComment="DATUMCOMMENT";
 }
 
-public class Scanner : ScannerBase<NetLispCompilerState>
+public class Scanner : ScannerBase<CompilerState>
 {
   public Scanner(params string[] sourceNames) : base(sourceNames) { }
   public Scanner(params TextReader[] sources) : base(sources) { }
@@ -112,22 +134,16 @@ public class Scanner : ScannerBase<NetLispCompilerState>
               switch(name)
               {
                 case "space": literal = ' '; break;
-                case "lf":
-                case "linefeed":
-                case "newline": literal = '\n'; break;
-                case "cr":
-                case "return": literal = '\r'; break;
+                case "lf": case "linefeed": case "newline": literal = '\n'; break;
+                case "cr": case "return": literal = '\r'; break;
                 case "tab": literal = '\t'; break;
-                case "bs":
-                case "backspace": literal = (char)8; break;
+                case "bs": case "backspace": literal = (char)8; break;
                 case "esc": literal = (char)27; break;
-                case "del":
-                case "delete": literal = (char)127; break;
+                case "del": case "delete": literal = (char)127; break;
                 case "nul": literal = (char)0; break;
                 case "alarm": literal = (char)7; break;
                 case "vtab": literal = (char)11; break;
-                case "ff":
-                case "page": literal = (char)12; break;
+                case "ff": case "page": literal = (char)12; break;
                 default:
                   AddMessage(NetLispDiagnostics.UnknownCharacterName, token.Start, name);
                   literal = '?';
@@ -299,6 +315,18 @@ public class Scanner : ScannerBase<NetLispCompilerState>
           case '}':  token.Type = TokenString.RCurly; break;
           case '\'': token.Type = TokenString.Quote; break;
           case '`':  token.Type = TokenString.BackQuote; break;
+
+          case ',': // unquote or unquote-splicing
+            if(NextChar() == '@')
+            {
+              token.Type = TokenString.Splice;
+              break;
+            }
+            else
+            {
+              token.Type = TokenString.Comma;
+              goto dontSkip;
+            }
 
           case ';': // single-line comment runs until EOL, 
             while(true)

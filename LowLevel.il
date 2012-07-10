@@ -17,23 +17,6 @@
 
 .class public sealed auto ansi LowLevel
 {
-  .method public static hidebysig float32 FloatRemainder(float32 a, float32 b) cil managed
-  {
-    .maxstack 2
-    ldarg.0 // return a rem b
-    ldarg.1
-    rem
-    ret
-  }
-
-  .method public static hidebysig float64 DoubleRemainder(float64 a, float64 b) cil managed
-  {
-    .maxstack 2
-    ldarg.0 // return a rem b
-    ldarg.1
-    rem
-    ret
-  }
 }
   
 } // .namespace Scripting.Runtime

@@ -6,6 +6,7 @@ namespace Scripting.Runtime
 
 public static class Ops
 {
+  /*
   #region Numeric operations
   public static object Add(int a, int b)
   {
@@ -79,7 +80,8 @@ public static class Ops
     catch(OverflowException) { return new Integer(a) - b; }
   }
   #endregion
-  
+  */
+
   #region Type conversion
   public static object ConvertTo(object obj, Type type)
   {
@@ -148,7 +150,7 @@ public static class Ops
 
   static InvalidCastException CantConvert(object obj, Type type)
   {
-    return new InvalidCastException("Can't convert "+TypeName(obj)+" to "+TypeName(type));
+    return new InvalidCastException("Can't convert " + TypeName(obj) + " to " + TypeName(type));
   }
 
   public readonly static object[] EmptyArray = new object[0];

@@ -481,10 +481,10 @@ public sealed class PropertyInfoWrapper : IPropertyInfo
 }
 #endregion
 
-#region TypeWrapper
-public class TypeWrapper : ITypeInfo
+#region TypeWrapperBase
+public abstract class TypeWrapperBase : ITypeInfo
 {
-  internal TypeWrapper(Type type)
+  protected TypeWrapperBase(Type type)
   {
     if(type == null) throw new ArgumentNullException();
     this.type = type;
@@ -615,17 +615,24 @@ public class TypeWrapper : ITypeInfo
   const BindingFlags SearchAll = BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Static|BindingFlags.Instance;
 
   readonly Type type;
-  
+}
+#endregion
+
+#region TypeWrapper
+public sealed class TypeWrapper : TypeWrapperBase
+{
+  internal TypeWrapper(Type type) : base(type) { }
+
   /// <summary>Gets an <see cref="ITypeInfo"/> interface for a <see cref="Type"/> object.</summary>
   /// <remarks>This method exists so that <see cref="ITypeInfo"/> objects can be checked for equality with a reference
   /// comparison.
   /// </remarks>
-  public static TypeWrapper Get(Type type)
+  public static TypeWrapperBase Get(Type type)
   {
     if(type == null) throw new ArgumentNullException();
     if(type is TypeBuilder) throw new ArgumentException("Use a TypeGenerator instead of wrapping a TypeBuilder.");
 
-    TypeWrapper ret;
+    TypeWrapperBase ret;
     lock(wrappers)
     {
       if(!wrappers.TryGetValue(type, out ret))
@@ -636,7 +643,7 @@ public class TypeWrapper : ITypeInfo
     return ret;
   }
 
-  public static ITypeInfo GetArray(ITypeInfo elementType, Type type)
+  public static TypeWrapperBase GetArray(ITypeInfo elementType, Type type)
   {
     if(type == null) throw new ArgumentNullException();
 
@@ -645,7 +652,7 @@ public class TypeWrapper : ITypeInfo
       return Get(type); // don't create an ArrayWrapper for an array of a built-in type
     }
 
-    TypeWrapper ret;
+    TypeWrapperBase ret;
     lock(wrappers)
     {
       if(!wrappers.TryGetValue(type, out ret))
@@ -656,46 +663,51 @@ public class TypeWrapper : ITypeInfo
     return ret;
   }
 
-  static readonly Dictionary<Type, TypeWrapper> wrappers = new Dictionary<Type, TypeWrapper>();
+  static readonly Dictionary<Type, TypeWrapperBase> wrappers = new Dictionary<Type, TypeWrapperBase>();
 
-  public static readonly TypeWrapper Bool     = Get(typeof(bool));
-  public static readonly TypeWrapper Byte     = Get(typeof(byte));
-  public static readonly TypeWrapper SByte    = Get(typeof(sbyte));
-  public static readonly TypeWrapper Short    = Get(typeof(short));
-  public static readonly TypeWrapper UShort   = Get(typeof(ushort));
-  public static readonly TypeWrapper Char     = Get(typeof(char));
-  public static readonly TypeWrapper Int      = Get(typeof(int));
-  public static readonly TypeWrapper UInt     = Get(typeof(uint));
-  public static readonly TypeWrapper Long     = Get(typeof(long));
-  public static readonly TypeWrapper ULong    = Get(typeof(ulong));
-  public static readonly TypeWrapper Decimal  = Get(typeof(decimal));
-  public static readonly TypeWrapper Integer  = Get(typeof(Runtime.Integer));
-  public static readonly TypeWrapper Single   = Get(typeof(float));
-  public static readonly TypeWrapper Double   = Get(typeof(double));
-  public static readonly TypeWrapper Complex  = Get(typeof(Runtime.Complex));
-  public static readonly TypeWrapper Rational = Get(typeof(Runtime.Rational));
-  public static readonly TypeWrapper ComplexRational = Get(typeof(Runtime.ComplexRational));
-  public static readonly TypeWrapper String   = Get(typeof(string));
-  public static readonly TypeWrapper Object   = Get(typeof(object));
-  public static readonly TypeWrapper IntPtr   = Get(typeof(IntPtr));
-  public static readonly TypeWrapper Void     = Get(typeof(void));
+  public static readonly TypeWrapper Bool     = (TypeWrapper)Get(typeof(bool));
+  public static readonly TypeWrapper Byte     = (TypeWrapper)Get(typeof(byte));
+  public static readonly TypeWrapper SByte    = (TypeWrapper)Get(typeof(sbyte));
+  public static readonly TypeWrapper Short    = (TypeWrapper)Get(typeof(short));
+  public static readonly TypeWrapper UShort   = (TypeWrapper)Get(typeof(ushort));
+  public static readonly TypeWrapper Char     = (TypeWrapper)Get(typeof(char));
+  public static readonly TypeWrapper Int      = (TypeWrapper)Get(typeof(int));
+  public static readonly TypeWrapper UInt     = (TypeWrapper)Get(typeof(uint));
+  public static readonly TypeWrapper Long     = (TypeWrapper)Get(typeof(long));
+  public static readonly TypeWrapper ULong    = (TypeWrapper)Get(typeof(ulong));
+  public static readonly TypeWrapper Decimal  = (TypeWrapper)Get(typeof(decimal));
+  public static readonly TypeWrapper Integer  = (TypeWrapper)Get(typeof(Runtime.Integer));
+  public static readonly TypeWrapper Single   = (TypeWrapper)Get(typeof(float));
+  public static readonly TypeWrapper Double   = (TypeWrapper)Get(typeof(double));
+  public static readonly TypeWrapper Complex  = (TypeWrapper)Get(typeof(Runtime.Complex));
+  public static readonly TypeWrapper Rational = (TypeWrapper)Get(typeof(Runtime.Rational));
+  public static readonly TypeWrapper ComplexRational = (TypeWrapper)Get(typeof(Runtime.ComplexRational));
+  public static readonly TypeWrapper String   = (TypeWrapper)Get(typeof(string));
+  public static readonly TypeWrapper Object   = (TypeWrapper)Get(typeof(object));
+  public static readonly TypeWrapper IntPtr   = (TypeWrapper)Get(typeof(IntPtr));
+  public static readonly TypeWrapper Void     = (TypeWrapper)Get(typeof(void));
 
   /// <summary>A type representing values whose type is not known. Automatic runtime conversion may be applied to
   /// values of unknown types, but otherwise it behaves like <see cref="Object"/>.
   /// </summary>
-  public static readonly TypeWrapper Unknown = new TypeWrapper(typeof(object));
+  public static readonly TypeWrapper Unknown = (TypeWrapper)new TypeWrapper(typeof(object));
+  /// <summary>A type wrapper representing values of any type. This is only valid when used to specify a desired
+  /// type, where it has the meaning that no type in particular is desired, but unlike <see cref="Unknown"/>,
+  /// no conversion to <see cref="Object"/> should be done.
+  /// </summary>
+  public static readonly TypeWrapper Any = (TypeWrapper)new TypeWrapper(typeof(void));
   /// <summary>An invalid type.</summary>
-  public static readonly TypeWrapper Invalid = new TypeWrapper(typeof(void));
+  public static readonly TypeWrapper Invalid = (TypeWrapper)new TypeWrapper(typeof(void));
 
-  public static readonly TypeWrapper ICallable    = Get(typeof(Runtime.ICallable));
-  public static readonly TypeWrapper TopLevel     = Get(typeof(Runtime.TopLevel));
-  public static readonly TypeWrapper ObjectArray  = Get(typeof(object[]));
+  public static readonly TypeWrapper ICallable    = (TypeWrapper)Get(typeof(Runtime.ICallable));
+  public static readonly TypeWrapper TopLevel     = (TypeWrapper)Get(typeof(Runtime.TopLevel));
+  public static readonly TypeWrapper ObjectArray  = (TypeWrapper)Get(typeof(object[]));
   public static readonly ITypeInfo[] EmptyTypes   = new ITypeInfo[0];
 }
 #endregion
 
 #region ArrayTypeWrapper
-public class ArrayTypeWrapper : TypeWrapper
+public sealed class ArrayTypeWrapper : TypeWrapperBase
 {
   internal ArrayTypeWrapper(ITypeInfo elementType, Type type) : base(type)
   {

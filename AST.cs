@@ -10,6 +10,7 @@ using Scripting.Runtime;
 namespace Scripting.AST
 {
 
+// TODO: take advantage of ASTNode.IsConstant
 #region Index
 public sealed class Index
 {
@@ -278,7 +279,17 @@ public abstract class ASTNode
   /// <summary>Gets or sets the namespace that defines the lexical scope in which this node is situated.</summary>
   public LexicalScope Scope
   {
-    get { return scope; }
+    get
+    {
+      ASTNode node = this;
+      do
+      {
+        if(node.scope != null) return node.scope;
+        node = node.ParentNode;
+      } while(node != null);
+
+      return null;
+    }
     set { scope = value; }
   }
 
@@ -368,7 +379,7 @@ public abstract class ASTNode
     if(ContextType == null) throw new InvalidOperationException("ContextType has not been set.");
     if(Scope == null) throw new InvalidOperationException("Scope has not been set.");
 
-    if(!CG.IsConvertible(ValueType, ContextType))
+    if((ContextType != TypeWrapper.Any || ValueType == TypeWrapper.Void) && !CG.IsConvertible(ValueType, ContextType))
     {
       AddMessage(CoreDiagnostics.CannotConvertType, CG.TypeName(ValueType), CG.TypeName(ContextType));
     }
@@ -426,6 +437,8 @@ public abstract class ASTNode
         throw new NotImplementedException(); // TODO: implement leave from try blocks
       }
     }
+
+    if(ContextType == TypeWrapper.Any) throw new InvalidOperationException("Can't return the 'any' type.");
     return ContextType;
   }
 
@@ -441,6 +454,10 @@ public abstract class ASTNode
     if(!IsTail)
     {
       return typeOnStack;
+    }
+    else if(ContextType == TypeWrapper.Any)
+    {
+      throw new InvalidOperationException("The 'any' type can't be used in a tail position.");
     }
     else
     {
@@ -675,6 +692,12 @@ public class BlockNode : ASTNode
     }
   }
 
+  public override void CheckSemantics2()
+  {
+    base.CheckSemantics2();
+    IsConstant = AreConstant(Children);
+  }
+
   public override ITypeInfo Emit(CodeGenerator cg)
   {
     if(Children.Count == 0) return TailReturn(cg, TypeWrapper.Void);
@@ -738,6 +761,12 @@ public abstract class CastNode : ASTNode
   public sealed override ITypeInfo ValueType
   {
     get { return type; }
+  }
+
+  public override void CheckSemantics2()
+  {
+    base.CheckSemantics2();
+    IsConstant = Value.IsConstant;
   }
 
   public sealed override ITypeInfo Emit(CodeGenerator cg)
@@ -854,8 +883,11 @@ public class IfNode : ASTNode
 {
   public IfNode(ASTNode condition, ASTNode ifTrue, ASTNode ifFalse)
     : this(Operator.LogicalTruth, condition, ifTrue, ifFalse) { }
+
   public IfNode(UnaryOperator truthOperator, ASTNode condition, ASTNode ifTrue, ASTNode ifFalse) : base(true)
   {
+    if(truthOperator == null || condition == null || ifTrue == null) throw new ArgumentNullException();
+    TruthOperator = truthOperator;
     Children.Add(condition);
     Children.Add(ifTrue);
     if(ifFalse != null) Children.Add(ifFalse);
@@ -899,6 +931,21 @@ public class IfNode : ASTNode
   }
 
   public readonly UnaryOperator TruthOperator;
+
+  public override void CheckSemantics2()
+  {
+    base.CheckSemantics2();
+
+    if(Condition.IsConstant)
+    {
+      IsConstant = (bool)TruthOperator.Evaluate(Condition.Evaluate()) ?
+        IfTrue.IsConstant : IfFalse == null || IfFalse.IsConstant;
+    }
+    else
+    {
+      IsConstant = false;
+    }
+  }
 
   public override ITypeInfo Emit(CodeGenerator cg)
   {
@@ -1040,6 +1087,12 @@ public class OpNode : ASTNode
     Operator.CheckSemantics(ContextType, Children);
   }
 
+  public override void CheckSemantics2()
+  {
+    base.CheckSemantics2();
+    IsConstant = AreConstant(Children);
+  }
+
   public override ITypeInfo Emit(CodeGenerator cg)
   {
     return TailReturn(cg, Operator.Emit(cg, ContextType, Children));
@@ -1090,6 +1143,12 @@ public class OptionsNode : ASTNode
       try { return Body.ValueType; }
       finally { CompilerState.Pop(); }
     }
+  }
+
+  public override void CheckSemantics2()
+  {
+    base.CheckSemantics2();
+    IsConstant = Body.IsConstant;
   }
 
   public override ITypeInfo Emit(CodeGenerator cg)
@@ -1502,10 +1561,13 @@ public sealed class UnsafeCastNode : CastNode
 #region VariableNode
 public class VariableNode : AssignableNode
 {
-  public VariableNode(string name) : base(false)
+  public VariableNode(string name) : this(name, null) { }
+
+  public VariableNode(string name, Slot slot) : base(false)
   {
     if(name == null) throw new ArgumentNullException();
     Name = name;
+    Slot = slot;
   }
 
   public readonly string Name;
@@ -1534,10 +1596,15 @@ public class VariableNode : AssignableNode
   public override ITypeInfo Emit(CodeGenerator cg)
   {
     AssertValidSlot();
-    if(CompilerState.Current.Optimize && IsVoid(ContextType)) return TailReturn(cg);
-
-    Slot.EmitGet(cg);
-    return TailReturn(cg, Slot.Type);
+    if(IsVoid(ContextType))
+    {
+      return TailReturn(cg);
+    }
+    else
+    {
+      Slot.EmitGet(cg);
+      return TailReturn(cg, Slot.Type);
+    }
   }
 
   public override void EmitSet(CodeGenerator cg, ASTNode valueNode, bool initialize)

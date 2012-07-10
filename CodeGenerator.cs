@@ -273,7 +273,6 @@ public static class CG
   {
     // REMEMBER TO KEEP THESE CHECKS IN SYNC WITH CodeGenerator.TryEmitSafeConversion
 
-    if(HasImplicitConversion(from, to)) return true; // it's safely convertible if there's an implicit conversion
     if(from == null) return !to.IsValueType; // null can be converted to reference types
     if(to == TypeWrapper.Void) return true; // if converting to 'void', we simply pop the value from the stack
 
@@ -291,7 +290,7 @@ public static class CG
       }
     }
 
-    return false;
+    return HasImplicitConversion(from, to); // it's safely convertible if there's an implicit conversion
   }
 
   public static bool IsFloatingPoint(Type type)
@@ -390,7 +389,8 @@ public static class CG
 
   public static string TypeName(Emit.ITypeInfo typeInfo)
   {
-    return typeInfo == Emit.TypeWrapper.Unknown ? "unknown" : Ops.TypeName(typeInfo.DotNetType);
+    return typeInfo == Emit.TypeWrapper.Unknown ? "unknown"
+                                                : typeInfo == null ? "null" : Ops.TypeName(typeInfo.DotNetType);
   }
 
   internal static void SetCustomAttribute(MemberInfo info, CustomAttributeBuilder attributeBuilder)
@@ -535,6 +535,7 @@ public class CodeGenerator
   /// </remarks>
   public void BeginScope()
   {
+    // TODO: see if this is needed now that we have namespaces and stuff
     if(scopes == null) scopes = new Stack<Dictionary<string,Slot>>();
     scopes.Push(new Dictionary<string,Slot>());
   }
@@ -1005,7 +1006,8 @@ public class CodeGenerator
     else // otherwise, do the conversion at runtime
     {
       EmitConstant(value);
-      return TryEmitSafeConversion(valueType, desiredType) ? desiredType : valueType;
+      return desiredType != TypeWrapper.Any && TryEmitSafeConversion(valueType, desiredType) ?
+        desiredType : valueType;
     }
   }
 

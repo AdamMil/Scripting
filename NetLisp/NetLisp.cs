@@ -1,3 +1,24 @@
+/*
+NetLisp is the reference implementation for a language similar to
+Scheme, also called NetLisp. This implementation is both interpreted
+and compiled, targetting the Microsoft .NET Framework.
+
+http://www.adammil.net/
+Copyright (C) 2007-2008 Adam Milazzo
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+*/
+
 using System;
 using System.Reflection.Emit;
 using Scripting;
@@ -10,72 +31,27 @@ using NetLisp.Runtime;
 namespace NetLisp
 {
 
-/* Basic Scheme, minus continuations, plus the following extensions:
+/* Basic Scheme, minus continuations, plus the following changes:
  * 
- * Strong typing:
- *    (lambda (.returns int) (a b (int c))
+ * Optional strong typing:
+ *    (lambda (.type int) (a b ([.type float] c))
  *      ...)
- *    (let (a (b 1) (int c 1))
+ *    (let ((a 0) (b 1) ([.type float] c 1))
  *      ...)
  *
  * Lambda default values:
  *    (lambda (a b (c 1)) (+ a b c))
+ *    (lambda (a b ([.type int] c 1)) (+ a b c))
  *
- * Type casting:
- *    (let ((a 1))
- *      (.cast double a)) -> 1.0
- *    (let ((a 1.6))
- *      (.cast int a)) -> 1
- * 
  * For the above, built-in type names are the same as in C#.
  * 
- * Setting compiler options:
- *    (lambda ((int a) (int b))
- *      (.options ((optimisticOperatorInlining #f))
- *        (+ a b))) ; this + will not be inlined, because we're assuming that the user may have overridden it
- *    
- *    (define addWithOverflow
- *      (lambda (a b) (.option ((checked #f)) (+ a b)))) ; this addition can overflow silently
- * 
- *    (.options ((allowRedefinition #f) (checked #f) (debug #f) (optimisticOperatorInlining #t))
- *      (define 1+ (lambda (a) (+ a 1)))  ; these functions will be as fast as possible
- *      (define 1- (lambda (a) (- a 1))))
+ * Simplified libraries:
+ *   list-ref, vector-ref, hash-ref, etc. just become index
+ *   vector-set!, hash-set!, etc. just become index-set!
+ *   char=?, string=?, fx=?, fl=?, etc. just become =
+ *   fx+, fl+, string-append, etc. just become +
+ *   etc...
  */
-
-#region NetLispCompilerState
-public sealed class NetLispCompilerState : CompilerState
-{
-  public NetLispCompilerState(NetLispLanguage language) : base(language)
-  {
-    // emit checked arithmetic that automatically promotes by default
-    Checked = PromoteOnOverflow = true;
-  }
-
-  public NetLispCompilerState(NetLispCompilerState template) : base(template)
-  {
-    AllowRedefinition  = template.AllowRedefinition;
-    OptimisticInlining = template.OptimisticInlining;
-  }
-
-  /// <summary>Whether the compiler allows definitions made using (define symbol value) to be changed. The compiler
-  /// will not allow those declarations to be changed, either by a subsequent define, or by a set! operation, although
-  /// they can be rebound in a nested scope. The benefit is that the compiler can emit strongly-typed and
-  /// highly-efficient code to access those declarations, especially in the case of functions defined via
-  /// (define symbol (lambda ...)), where preventing redeclaration allows the compiler to inline functions and perform
-  /// type checking on function call arguments.
-  /// </summary>
-  public bool AllowRedefinition = true;
-
-  /// <summary>Controls the behavior of the compiler when emitting core functions, such as +, -, eq?, etc., in a
-  /// context where it is unknown whether the user has redefined them or not. If true, the compiler will optimistically
-  /// assume that the user has not overridden them, and so highly-efficient type-specific versions can be emitted. If
-  /// false, the compiler will assume that the user may have overridden them and emit the operator as a loosely-bound
-  /// function call. In contexts where the compiler can prove that an operator has or has not been overridden, this
-  /// option has no effect.
-  /// </summary>
-  public bool OptimisticInlining = true;
-}
-#endregion
 
 #region NetLispLanguage
 public sealed class NetLispLanguage : Language
@@ -94,12 +70,9 @@ public sealed class NetLispLanguage : Language
 
   public override CompilerState CreateCompilerState()
   {
-    return new NetLispCompilerState(this);
-  }
-
-  public override CompilerState CreateCompilerState(CompilerState currentState)
-  {
-    return new NetLispCompilerState((NetLispCompilerState)currentState);
+    CompilerState state = new CompilerState(this);
+    state.Checked = state.PromoteOnOverflow = true; // we promote by default
+    return state;
   }
 
   public override ASTDecorator CreateDecorator(DecoratorType type)
@@ -116,9 +89,9 @@ public sealed class NetLispLanguage : Language
     return decorator;
   }
 
-  public override IParser CreateParser(IScanner scanner)
+  public override IASTParser CreateParser(IScanner scanner)
   {
-    return new Parser(scanner);
+    return new ASTParser(new LispParser(scanner));
   }
 
   public override IScanner CreateScanner(params string[] sourceNames)
@@ -156,7 +129,12 @@ public static class NetLispDiagnostics
   public static readonly Diagnostic OptionExpects         = Error(551, "Option '{0}' expects {1} value");
   public static readonly Diagnostic UnknownOption         = Error(552, "Unknown option '{0}'");
   public static readonly Diagnostic ExpectedLibraryOrImport = Error(553, "Expected (library) or (import) form");
-  public static readonly Diagnostic UnexpectedDefine      = Error(554, "(define) cannot occur here");
+  public static readonly Diagnostic UnexpectedDefine      = Error(554, "(define) cannot occur in an expression context");
+  public static readonly Diagnostic IllegalEmptyList      = Error(555, "An empty list (ie, ()) was found. Empty lists must be quoted, like '()");
+  public static readonly Diagnostic MalformedDottedList   = Error(556, "Malformed dotted list");
+  public static readonly Diagnostic ExpectedSyntax        = Error(557, "Expected {0}");
+  public static readonly Diagnostic UnexpectedSyntax      = Error(558, "Unexpected {0}");
+  public static readonly Diagnostic SyntaxError           = Error(559, "Syntax error. {0}");
 
   static Diagnostic Error(int code, string format)
   {

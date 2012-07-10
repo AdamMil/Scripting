@@ -7,8 +7,8 @@ namespace Scripting.AST
 {
 
 #region IParser
-/// <summary>An interface that represents a parser.</summary>
-public interface IParser
+/// <summary>An interface that represents a parser that creates an abstract syntax tree.</summary>
+public interface IASTParser
 {
   /// <summary>Parses the entire input stream into a syntax tree.</summary>
   /// <returns>A syntax tree if there is any input, or null if there is no input.</returns>
@@ -28,19 +28,28 @@ public interface IParser
 }
 #endregion
 
+#region ASTParserBase
+/// <summary>A simple base class for parsers that produce abstract syntax trees.</summary>
+public abstract class ASTParserBase<CompilerStateType> : ParserBase<CompilerStateType>, IASTParser
+  where CompilerStateType : CompilerState
+{
+  protected ASTParserBase(IScanner scanner) : base(scanner) { }
+
+  public abstract ASTNode ParseProgram();
+  public abstract ASTNode ParseOne();
+  public abstract ASTNode ParseExpression();
+}
+#endregion
+
 #region ParserBase
 /// <summary>A simple base class for parsers.</summary>
-public abstract class ParserBase<CompilerStateType> : IParser where CompilerStateType : CompilerState
+public abstract class ParserBase<CompilerStateType> where CompilerStateType : CompilerState
 {
   protected ParserBase(IScanner scanner)
   {
     if(scanner == null) throw new ArgumentNullException();
     this.scanner = scanner;
   }
-
-  public abstract ASTNode ParseProgram();
-  public abstract ASTNode ParseOne();
-  public abstract ASTNode ParseExpression();
 
   protected CompilerStateType CompilerState
   {

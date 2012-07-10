@@ -360,6 +360,7 @@ public static class CoreDiagnostics
   // syntax checking
   public static readonly Diagnostic VariableRedefined         = Error(201, "A variable named '{0}' is already defined in this scope");
   public static readonly Diagnostic UnassignedVariableUsed    = Error(202, "Use of unassigned variable '{0}'");
+  public static readonly Diagnostic ParameterRedefined        = Error(203, "A parameter named '{0}' is already defined");
   // semantics
   public static readonly Diagnostic MissingName               = Error(301, "The name '{0}' does not exist in the current context");
   public static readonly Diagnostic CannotConvertType         = Error(302, "Cannot convert type '{0}' to '{1}'");
@@ -368,7 +369,6 @@ public static class CoreDiagnostics
   public static readonly Diagnostic CannotApplyOperator       = Error(305, "Operator '{0}' cannot be applied to values of type '{1}'");
   public static readonly Diagnostic CannotApplyOperator2      = Error(305, "Operator '{0}' cannot be applied to values of type '{1}' and '{2}'");
   public static readonly Diagnostic ReadOnlyVariableAssigned  = Error(306, "Read-only variable '{0}' cannot be assigned");
-
   public static readonly Diagnostic VariableAssignedToSelf    = Warning(1001, "Variable assigned to itself; did you mean to assign something else?");
 
   static Diagnostic Error(int code, string format)
