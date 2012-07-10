@@ -255,14 +255,14 @@ public sealed class ComplexRational
 {
   public ComplexRational(Rational real)
   {
-    Real      = real;
-    Imaginary = Rational.Zero;
+    this.real      = real;
+    this.imaginary = Rational.Zero;
   }
 
   public ComplexRational(Rational real, Rational imag)
   {
-    Real      = real;
-    Imaginary = imag;
+    this.real      = real;
+    this.imaginary = imag;
   }
 
   public double Angle
@@ -275,6 +275,11 @@ public sealed class ComplexRational
     get { return new ComplexRational(Real, -Imaginary); }
   }
 
+  public ComplexRational Inverse
+  {
+    get { return new ComplexRational(-Imaginary, Real); }
+  }
+
   public double Magnitude
   {
     get
@@ -284,9 +289,14 @@ public sealed class ComplexRational
     }
   }
 
-  public ComplexRational Inverse
+  public Rational Real
   {
-    get { return new ComplexRational(-Imaginary, Real); }
+    get { return real; }
+  }
+
+  public Rational Imaginary
+  {
+    get { return imaginary; }
   }
 
   public override bool Equals(object obj)
@@ -311,7 +321,7 @@ public sealed class ComplexRational
     return sb.ToString();
   }
 
-  public Rational Real, Imaginary;
+  Rational real, imaginary;
 
   public static ComplexRational operator+(ComplexRational a, ComplexRational b) 
   {

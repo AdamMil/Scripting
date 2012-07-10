@@ -1,3 +1,24 @@
+/*
+NetLisp is the reference implementation for a language similar to
+Scheme, also called NetLisp. This implementation is both interpreted
+and compiled, targetting the Microsoft .NET Framework.
+
+http://www.adammil.net/
+Copyright (C) 2007-2008 Adam Milazzo
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+*/
+
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -15,7 +36,8 @@ namespace NetLisp.AST
 #region LispTypes
 public static class LispTypes
 {
-  public static readonly TypeWrapper Pair = TypeWrapper.Get(typeof(Pair));
+  public static readonly TypeWrapper Pair = (TypeWrapper)TypeWrapper.Get(typeof(Pair));
+  public static readonly TypeWrapper Void = (TypeWrapper)TypeWrapper.Get(typeof(Singleton));
 }
 #endregion
 
@@ -39,23 +61,25 @@ public sealed class TopLevelScopeDecorator : PrefixVisitor
   {
     node.Scope = scope;
 
-    DefineNode def = node as DefineNode;
+    DefineValuesNode def = node as DefineValuesNode;
     if(def != null)
     {
-      string varName = def.Variable.Name;
-      Symbol oldSymbol = scope.Get(varName);
-      bool allowRedefinition = ((NetLispCompilerState)CurrentOptions).AllowRedefinition;
-
-      if(oldSymbol == null)
+      foreach(VariableNode variable in def.Variables)
       {
-        // TODO: warn if redefining a builtin and the compiler is assuming builtins aren't redefined
-        def.LHS.IsReadOnly = !allowRedefinition;
-        def.RHS.Scope      = scope;
+        Symbol oldSymbol = scope.Get(variable.Name);
+        bool allowRedefinition = true; // TODO: ...
 
-        scope = new LexicalScope(scope);
-        scope.Add(varName, new Symbol(def.Variable, def.RHS));
+        if(oldSymbol == null)
+        {
+          // TODO: warn if redefining a builtin and the compiler is assuming builtins aren't redefined
+          def.LHS.IsReadOnly = !allowRedefinition;
+          def.RHS.Scope      = scope;
+
+          scope = new LexicalScope(scope);
+          scope.Add(variable.Name, new Symbol(variable, def.RHS));
+        }
+        else if(!allowRedefinition) AddMessage(CoreDiagnostics.VariableRedefined, node, variable.Name);
       }
-      else if(!allowRedefinition) AddMessage(CoreDiagnostics.VariableRedefined, node, varName);
 
       def.LHS.Scope = scope;
     }
@@ -79,8 +103,6 @@ public class ScopeDecorator : PrefixVisitor
 
   protected override bool Visit(ASTNode node)
   {
-    if(node.Scope == null && node.ParentNode != null) node.Scope = node.ParentNode.Scope;
-
     if(node is VariableNode) // if it's a variable node, set its slot if necessary
     {
       VariableNode var = (VariableNode)node;
@@ -93,26 +115,29 @@ public class ScopeDecorator : PrefixVisitor
         AddMessage(CoreDiagnostics.UnassignedVariableUsed, node, var.Name);
       }
     }
-    else if(node is LocalBindingNode) // if it's a binding node, add the bound variables to the array
+    else if(node is LetValuesBaseNode) // if it's a binding node, add the bound variables to the array
     {
-      LocalBindingNode bind = (LocalBindingNode)node;
+      LetValuesBaseNode bind = (LetValuesBaseNode)node;
+      bool isRecursive = bind is LetRecValuesNode;
 
-      // first visit the initial values, since they'll be executed before the binding takes place
-      foreach(LocalBindingNode.Binding binding in bind.Bindings)
-      {
-        binding.Scope = binding.Variable.Scope = bind.Scope;
-        if(binding.InitialValue != null) RecursiveVisit(binding.InitialValue);
-      }
+      // if it's not recursive (let-values), visit the initial values before the bindings
+      if(!isRecursive) VisitLetInitialValues(bind);
 
       // now add the new bindings
       bind.Body.Scope = new LexicalScope(bind.Scope);
-      foreach(LocalBindingNode.Binding binding in bind.Bindings)
+      foreach(LetValuesNode.Binding binding in bind.Bindings)
       {
-        Slot slot = IsCompiled ? (Slot)new LocalProxySlot(binding.Name, binding.Type)
-                               : new InterpretedLocalSlot(binding.Name, binding.Type);
-        bindings.Add(new KeyValuePair<string,Binding>(binding.Name, new Binding(binding.Variable, slot, false)));
-        bind.Body.Scope.Add(binding.Name, new Symbol(binding.Variable));
+        foreach(VariableNode var in binding.Variable.Children)
+        {
+          if(!IsCompiled) var.Slot = new InterpretedLocalSlot(var.Name, var.ValueType);
+          bindings.Add(new KeyValuePair<string,Binding>(var.Name,
+                                                        new Binding(var, var.Slot, binding.InitialValue != null)));
+          bind.Body.Scope.Add(var.Name, new Symbol(var));
+        }
       }
+
+      // if it's recursive (letrec-values), visit the initial values after the bindings
+      if(isRecursive) VisitLetInitialValues(bind);
 
       RecursiveVisit(bind.Body); // process the body of the 'let'
       
@@ -120,19 +145,21 @@ public class ScopeDecorator : PrefixVisitor
       bindings.RemoveRange(bindings.Count-bind.Bindings.Count, bind.Bindings.Count);
       return false;
     }
-    else if(node is DefineNode)
+    else if(node is DefineValuesNode)
     {
-      DefineNode def = (DefineNode)node;
+      DefineValuesNode def = (DefineValuesNode)node;
 
       RecursiveVisit(def.RHS);
 
       if(functions == null || functions.Count == 0) // it's a top-level definition
       {
-        int index = UpdateBinding(def.Variable);
-
-        if(!((NetLispCompilerState)CurrentOptions).AllowRedefinition)
+        foreach(VariableNode variable in def.Variables)
         {
-          bindings[index].Value.UpdateSlot(new StaticTopLevelSlot(def.Variable.Name, def.RHS.ValueType));
+          int index = UpdateBinding(variable);
+          if(false)  // TODO: ... if we don't allow redefinition
+          {
+            bindings[index].Value.UpdateSlot(new StaticTopLevelSlot(variable.Name, def.RHS.ValueType));
+          }
         }
       }
       else // the definition was not found at the top level
@@ -149,7 +176,6 @@ public class ScopeDecorator : PrefixVisitor
 
       if(var != null) // if assigning to a variable, mark the variable as having been written to
       {
-        assign.LHS.Scope = assign.Scope;
         RecursiveVisit(assign.RHS); // visit the right side first to so we catch "var a=a" as an error
         bindings[UpdateBinding(var)].Value.Usage |= Usage.Written;
         return false;
@@ -162,7 +188,6 @@ public class ScopeDecorator : PrefixVisitor
       // first visit the default parameter values, since they'll be executed outside the function body
       foreach(ParameterNode param in func.Parameters)
       {
-        param.Scope = param.Variable.Scope = func.Scope;
         if(param.DefaultValue != null) RecursiveVisit(param.DefaultValue);
       }
 
@@ -376,7 +401,7 @@ public class ScopeDecorator : PrefixVisitor
     if(string.IsNullOrEmpty(var.Name)) throw new ArgumentException("Variable name cannot be empty.");
 
     // if not, assume it's a global variable reference and insert a binding for it.
-    bool allowRedefinition = ((NetLispCompilerState)CurrentOptions).AllowRedefinition;
+    bool allowRedefinition = true;  // TODO: ...
     Binding globalBinding = new Binding(var, new TopLevelSlot(var.Name, !allowRedefinition), true);
     bindings.Insert(0, new KeyValuePair<string,Binding>(var.Name, globalBinding));
 
@@ -386,6 +411,14 @@ public class ScopeDecorator : PrefixVisitor
     }
     
     return 0;
+  }
+
+  void VisitLetInitialValues(LetValuesBaseNode node)
+  {
+    foreach(LetValuesNode.Binding binding in node.Bindings)
+    {
+      if(binding.InitialValue != null) RecursiveVisit(binding.InitialValue);
+    }
   }
 
   List<KeyValuePair<string,Binding>> bindings = new List<KeyValuePair<string,Binding>>();
@@ -516,21 +549,198 @@ public sealed class CallNode : ASTNode
 
   static bool ShouldInline(string name)
   {
-    return ((NetLispCompilerState)CompilerState.Current).OptimisticInlining &&
-           IsBuiltinFunction(name) && !IsOverriddenInThisScope(name);
+    // TODO: this should work by examining the binding to see if it's the built-in version or not
+    return IsBuiltinFunction(name) && !IsOverriddenInThisScope(name);
   }
 }
 #endregion
 
-#region DefineNode
-public class DefineNode : AssignNode
+#region DefineValuesNode
+public class DefineValuesNode : AssignNode
 {
-  public DefineNode(string name, ASTNode value) : base(new VariableNode(name), value, true) { }
+  public DefineValuesNode(VariableNode[] variables, ASTNode value)
+    : base(new MultipleVariableNode(variables), value, true) { }
 
-  public VariableNode Variable
+  public ASTNodeCollection Variables
   {
-    get { return (VariableNode)LHS; }
+    get { return LHS.Children; }
   }
+}
+#endregion
+
+#region LetValuesBaseNode
+public abstract class LetValuesBaseNode : ASTNode
+{
+  public LetValuesBaseNode(Binding[] bindings, ASTNode body) : base(true)
+  {
+    if(bindings == null || body == null) throw new ArgumentNullException();
+
+    Children.Add(new ContainerNode());
+    Children.Add(body);
+    Bindings.AddRange(bindings);
+  }
+
+  #region Binding
+  public sealed class Binding : NonExecutableNode
+  {
+    public Binding(MultipleVariableNode variable, ASTNode initialValue) : base(true)
+    {
+      if(variable == null) throw new ArgumentNullException();
+      Children.Add(variable);
+      if(initialValue != null) Children.Add(initialValue);
+    }
+
+    public ASTNode InitialValue
+    {
+      get { return Children.Count >= 2 ? Children[1] : null; }
+    }
+    
+    public MultipleVariableNode Variable
+    {
+      get { return (MultipleVariableNode)Children[0]; }
+    }
+
+    public override void SetValueContext(ITypeInfo desiredType)
+    {
+      base.SetValueContext(desiredType);
+      Variable.SetValueContext(TypeWrapper.Unknown); // the variable will never be retrieved, only set
+      if(InitialValue != null) InitialValue.SetValueContext(Variable.ValueType);
+    }
+  }
+  #endregion
+
+  public ASTNodeCollection Bindings
+  {
+    get { return Children[0].Children; }
+  }
+  
+  public ASTNode Body
+  {
+    get { return Children[1]; }
+  }
+
+  public override ITypeInfo ValueType
+  {
+    get { return Body.ValueType; }
+  }
+
+  public override void CheckSemantics2()
+  {
+    base.CheckSemantics2();
+    IsConstant = Body.IsConstant;
+  }
+
+  public override ITypeInfo Emit(CodeGenerator cg)
+  {
+    cg.BeginScope();
+
+    foreach(Binding binding in Bindings)
+    {
+      if(binding.InitialValue != null)
+      {
+        binding.Variable.EmitSet(cg, binding.InitialValue, true);
+      }
+      else
+      {
+        foreach(AssignableNode var in binding.Variable.Children)
+        {
+          cg.EmitDefault(var.ValueType);
+          var.EmitSet(cg, var.ValueType, true);
+        }
+      }
+    }
+    
+    ITypeInfo emittedType = Body.Emit(cg);
+    cg.EndScope();
+    return emittedType;
+  }
+
+  public override void MarkTail(bool tail)
+  {
+    IsTail = tail;
+    foreach(ASTNode node in Bindings) node.MarkTail(false);
+    Body.MarkTail(tail);
+  }
+
+  public override void SetValueContext(ITypeInfo desiredType)
+  {
+    base.SetValueContext(desiredType);
+    foreach(ASTNode node in Bindings) node.SetValueContext(TypeWrapper.Unknown);
+    Body.SetValueContext(desiredType);
+  }
+
+  protected object GetDefaultValue(ITypeInfo type)
+  {
+    return type.IsValueType ? Activator.CreateInstance(type.DotNetType) : null;
+  }
+}
+#endregion
+
+#region LetValuesNode
+public sealed class LetValuesNode : LetValuesBaseNode
+{
+  public LetValuesNode(Binding[] bindings, ASTNode body) : base(bindings, body) { }
+
+  public override object Evaluate()
+  {
+    InterpreterEnvironment env = InterpreterEnvironment.PushNew();
+    try
+    {
+      foreach(Binding binding in Bindings)
+      {
+        // first add the names
+        foreach(VariableNode var in binding.Variable.Children)
+        {
+          env.Bind(var.Name, binding.InitialValue == null ? GetDefaultValue(var.ValueType) : null);
+        }
+
+        // then set their values
+        if(binding.InitialValue != null) binding.Variable.EvaluateSet(binding.InitialValue.Evaluate(), true);
+      }
+
+      return Body.Evaluate();
+    }
+    finally { InterpreterEnvironment.Pop(); }
+  }
+}
+#endregion
+
+#region LetRecValuesNode
+public sealed class LetRecValuesNode : LetValuesBaseNode
+{
+  public LetRecValuesNode(Binding[] bindings, ASTNode body) : base(bindings, body) { }
+
+  public override object Evaluate()
+  {
+    InterpreterEnvironment env = InterpreterEnvironment.PushNew();
+    try
+    {
+      // first add all the names
+      foreach(Binding binding in Bindings)
+      {
+        foreach(VariableNode var in binding.Variable.Children)
+        {
+          env.Bind(var.Name, binding.InitialValue == null ? GetDefaultValue(var.ValueType) : null);
+        }
+      }
+
+      // then set all their values
+      foreach(Binding binding in Bindings)
+      {
+        if(binding.InitialValue != null) binding.Variable.EvaluateSet(binding.InitialValue.Evaluate(), true);
+      }
+
+      return Body.Evaluate();
+    }
+    finally { InterpreterEnvironment.Pop(); }
+  }
+}
+#endregion
+
+#region LispSymbolNode
+public sealed class LispSymbolNode : LiteralNode
+{
+  public LispSymbolNode(string name) : base(LispSymbol.Get(name), true) { }
 }
 #endregion
 
@@ -564,6 +774,12 @@ public sealed class ListNode : ASTNode
   public override ITypeInfo ValueType
   {
     get { return LispTypes.Pair; }
+  }
+
+  public override void CheckSemantics2()
+  {
+    base.CheckSemantics2();
+    IsConstant = AreConstant(ListItems) && (DotItem == null || DotItem.IsConstant);
   }
 
   public override ITypeInfo Emit(CodeGenerator cg)
@@ -615,166 +831,168 @@ public sealed class ListNode : ASTNode
 }
 #endregion
 
-#region LocalBindingNode
-public sealed class LocalBindingNode : ASTNode
+#region MultipleVariablesNode
+public sealed class MultipleVariableNode : AssignableNode
 {
-  public LocalBindingNode(string name, ASTNode init, ASTNode body) 
-    : this(new string[] { name }, new ASTNode[] { init }, null, body) { }
-  public LocalBindingNode(string name, ASTNode init, ITypeInfo type, ASTNode body)
-    : this(new string[] { name }, new ASTNode[] { init }, new ITypeInfo[] { type }, body) { }
-  public LocalBindingNode(string[] names, ASTNode[] inits, ASTNode body) : this(names, inits, null, body) { }
-
-  public LocalBindingNode(string[] names, ASTNode[] inits, ITypeInfo[] types, ASTNode body) : base(true)
+  public MultipleVariableNode(AssignableNode[] assignables) : base(true)
   {
-    if(names == null || body == null) throw new ArgumentNullException();
-    if(inits != null && inits.Length != names.Length || types != null && types.Length != names.Length)
-    {
-      throw new ArgumentException("Binding array lengths do not match.");
-    }
-
-    Children.Add(new ContainerNode());
-    Children.Add(body);
-    
-    for(int i=0; i<names.Length; i++)
-    {
-      Bindings.Add(new Binding(names[i], inits == null ? null : inits[i], types == null ? null : types[i]));
-    }
-  }
-
-  #region Binding
-  public sealed class Binding : NonExecutableNode
-  {
-    public Binding(string name, ASTNode initialValue, ITypeInfo type) : base(true)
-    {
-      if(name == null) throw new ArgumentNullException();
-      Children.Add(new VariableNode(name));
-      if(initialValue != null) Children.Add(initialValue);
-      this.type = type == null ? TypeWrapper.Object : type;
-    }
-
-    public ASTNode InitialValue
-    {
-      get { return Children.Count >= 2 ? Children[1] : null; }
-    }
-    
-    public string Name
-    {
-      get { return Variable.Name; }
-    }
-
-    public ITypeInfo Type
-    {
-      get { return type; }
-    }
-
-    public VariableNode Variable
-    {
-      get { return (VariableNode)Children[0]; }
-    }
-
-    public override void SetValueContext(ITypeInfo desiredType)
-    {
-      base.SetValueContext(desiredType);
-      Variable.SetValueContext(TypeWrapper.Unknown); // the variable will never be retrieved, only set
-      if(InitialValue != null) InitialValue.SetValueContext(Variable.ValueType);
-    }
-
-    readonly ITypeInfo type;
-  }
-  #endregion
-
-  public ASTNodeCollection Bindings
-  {
-    get { return Children[0].Children; }
-  }
-  
-  public ASTNode Body
-  {
-    get { return Children[1]; }
+    if(assignables == null) throw new ArgumentNullException();
+    if(assignables.Length == 0) throw new ArgumentException("No variables were given.");
+    Children.AddRange(assignables);
   }
 
   public override ITypeInfo ValueType
   {
-    get { return Body.ValueType; }
+    get
+    {
+      if(Children.Count == 1) return Children[0].ValueType;
+      else
+      {
+        ITypeInfo[] types = new ITypeInfo[Children.Count];
+        for(int i=0; i<types.Length; i++) types[i] = Children[i].ValueType;
+        return new MultipleValuesType(types);
+      }
+    }
+  }
+
+  public override void CheckSemantics2()
+  {
+    base.CheckSemantics2();
+    IsConstant = AreConstant(Children);
   }
 
   public override ITypeInfo Emit(CodeGenerator cg)
   {
-    cg.BeginScope();
-    foreach(Binding binding in Bindings)
+    if(Children.Count == 1)
     {
-      if(binding.InitialValue != null)
+      return Children[0].Emit(cg);
+    }
+    else
+    {
+      cg.EmitObjectArray(Children);
+      cg.EmitNew(typeof(MultipleValues), typeof(object[]));
+      return TailReturn(cg, ValueType);
+    }
+  }
+
+  public override void EmitSet(CodeGenerator cg, ASTNode valueNode, bool initialize)
+  {
+    ITypeInfo type = valueNode.ValueType;
+
+    if(Children.Count == 1 && type.DotNetType != typeof(MultipleValues))
+    {
+      ((AssignableNode)Children[0]).EmitSet(cg, valueNode, initialize);
+    }
+    else
+    {
+      EmitSet(cg, valueNode.Emit(cg), initialize);
+    }
+  }
+
+  public override void EmitSet(CodeGenerator cg, ITypeInfo typeOnStack, bool initialize)
+  {
+    if(Children.Count == 1 && typeOnStack.DotNetType != typeof(MultipleValues))
+    {
+      ((AssignableNode)Children[0]).EmitSet(cg, typeOnStack, initialize);
+    }
+    else
+    {
+      MultipleValuesType mvType = typeOnStack as MultipleValuesType;
+
+      if(Children.Count == 1)
       {
-        binding.Variable.EmitSet(cg, binding.InitialValue, true);
+        cg.EmitCall(typeof(LispOps), "GetSingleValue");
+        EmitSet(cg, mvType, 0, initialize);
       }
       else
       {
-        cg.EmitDefault(binding.Type);
-        binding.Variable.EmitSet(cg, binding.Type, true);
+        if(mvType == null)
+        {
+          cg.EmitConversion(typeOnStack, TypeWrapper.Object);
+          typeOnStack = TypeWrapper.Object;
+        }
+
+        cg.EmitInt(Children.Count);
+        cg.EmitCall(typeof(LispOps), "ExpectValues", typeOnStack.DotNetType, typeof(int));
+        cg.EmitFieldGet(typeof(MultipleValues), "Values");
+
+        for(int i=0; i<Children.Count; i++)
+        {
+          if(i != Children.Count-1) cg.EmitDup();
+          cg.EmitInt(i);
+          cg.ILG.Emit(OpCodes.Ldelem_Ref);
+          EmitSet(cg, mvType, i, initialize);
+        }
       }
     }
-    
-    ITypeInfo emittedType = Body.Emit(cg);
-    cg.EndScope();
-    return emittedType;
   }
 
-  public override object Evaluate()
+  public override void EvaluateSet(object newValue, bool initialize)
   {
-    InterpreterEnvironment env = InterpreterEnvironment.PushNew();
-    try
+    if(Children.Count == 1)
     {
-      foreach(Binding binding in Bindings)
-      {
-        object initialValue;
-        if(binding.InitialValue == null)
-        {
-          if(binding.Type.IsValueType)
-          {
-            initialValue = Activator.CreateInstance(binding.Type.DotNetType);
-          }
-          else
-          {
-            initialValue = null;
-          }
-        }
-        else
-        {
-          initialValue = binding.InitialValue == null ? null : binding.InitialValue.Evaluate();
-          if(binding.Type != typeof(object))
-          {
-            initialValue = Ops.ConvertTo(initialValue, binding.Type.DotNetType);
-          }
-        }
-
-        env.Bind(binding.Name, initialValue);
-      }
-
-      return Body.Evaluate();
+      ((AssignableNode)Children[0]).EvaluateSet(LispOps.GetSingleValue(newValue), initialize);
     }
-    finally { InterpreterEnvironment.Pop(); }
+    else
+    {
+      MultipleValues values = LispOps.ExpectValues(newValue, Children.Count);
+      for(int i=0; i<Children.Count; i++) ((AssignableNode)Children[i]).EvaluateSet(values.Values[i], initialize);
+    }
+  }
+
+  public override bool IsSameSlotAs(ASTNode rhs)
+  {
+    foreach(AssignableNode var in Children)
+    {
+      if(var.IsSameSlotAs(rhs)) return true;
+    }
+    return false;
   }
 
   public override void MarkTail(bool tail)
   {
-    IsTail = tail;
-    foreach(ASTNode node in Bindings) node.MarkTail(false);
-    Body.MarkTail(tail);
+    if(Children.Count == 1)
+    {
+      IsTail = tail;
+      Children[0].MarkTail(tail);
+    }
+    else
+    {
+      base.MarkTail(tail);
+    }
   }
 
   public override void SetValueContext(ITypeInfo desiredType)
   {
     base.SetValueContext(desiredType);
-    foreach(ASTNode node in Bindings) node.SetValueContext(TypeWrapper.Unknown);
-    Body.SetValueContext(desiredType);
-  }
-}
-#endregion
 
-#region SymbolNode
-public sealed class SymbolNode : LiteralNode
-{
-  public SymbolNode(string name) : base(LispSymbol.Get(name), true) { }
+    if(Children.Count == 1)
+    {
+      Children[0].SetValueContext(desiredType);
+    }
+    else
+    {
+      foreach(ASTNode node in Children) node.SetValueContext(TypeWrapper.Void);
+    }
+  }
+
+  void EmitSet(CodeGenerator cg, MultipleValuesType mvType, int i, bool initialize)
+  {
+    AssignableNode var = (AssignableNode)Children[i];
+    ITypeInfo typeOnStack;
+
+    if(mvType != null && CG.HasImplicitConversion(mvType.ValueTypes[i], var.ValueType))
+    {
+      typeOnStack = mvType.ValueTypes[i];
+      cg.EmitUnsafeConversion(TypeWrapper.Object, typeOnStack);
+    }
+    else
+    {
+      typeOnStack = TypeWrapper.Unknown;
+    }
+
+    var.EmitSet(cg, typeOnStack, initialize);
+  }
 }
 #endregion
 
@@ -782,6 +1000,7 @@ public sealed class SymbolNode : LiteralNode
 public sealed class VectorNode : ASTNode
 {
   public VectorNode() : this(null) { }
+  
   public VectorNode(params ASTNode[] items) : base(true)
   {
     if(items != null)
@@ -793,6 +1012,12 @@ public sealed class VectorNode : ASTNode
   public override ITypeInfo ValueType
   {
     get { return ElementType.MakeArrayType(); }
+  }
+
+  public override void CheckSemantics2()
+  {
+    base.CheckSemantics2();
+    IsConstant = AreConstant(Children);
   }
 
   public override ITypeInfo Emit(CodeGenerator cg)
@@ -839,6 +1064,39 @@ public sealed class VectorNode : ASTNode
   }
 
   ITypeInfo elementType;
+}
+#endregion
+
+#region VoidNode
+public sealed class VoidNode : ASTNode
+{
+  public VoidNode() : base(false)
+  {
+    IsConstant = true;
+  }
+
+  public override ITypeInfo ValueType
+  {
+    get { return LispTypes.Void; }
+  }
+
+  public override ITypeInfo Emit(CodeGenerator cg)
+  {
+    if(IsVoid(ContextType))
+    {
+      return TailReturn(cg);
+    }
+    else
+    {
+      cg.EmitFieldGet(typeof(LispOps), "Void");
+      return TailReturn(cg, ValueType);
+    }
+  }
+
+  public override object Evaluate()
+  {
+    return LispOps.Void;
+  }
 }
 #endregion
 

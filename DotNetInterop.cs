@@ -262,6 +262,10 @@ sealed class Signature
  	  {
  	    hash ^= ParamTypes[i].GetHashCode();
  	  }
+    if(HasParamArray) hash ^= 0x40000000;
+    if(RequireThisPtr) hash ^= 0x20000000;
+    if(IsConstructor) hash ^= 0x10000000;
+    hash ^= (int)Convention;
  	  return hash;
   }
 
